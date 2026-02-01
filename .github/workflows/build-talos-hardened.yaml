@@ -10,6 +10,8 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: itlusions/itl-talos-hardened-os
   TALOS_VERSION: v1.9.0
+  PKGS_VERSION: release-1.9
+  BUILD_CUSTOM_KERNEL: false
 
 jobs:
   build-branding:
@@ -90,6 +92,59 @@ jobs:
           name: branding-assets
           path: branding/output/
           retention-days: 7
+
+  build-kernel:
+    name: Build Custom Kernel
+    runs-on: ubuntu-latest
+    if: vars.BUILD_CUSTOM_KERNEL == 'true'
+    steps:
+      - name: Checkout pkgs repository
+        uses: actions/checkout@v4
+        with:
+          repository: siderolabs/pkgs
+          ref: ${{ env.PKGS_VERSION }}
+          path: pkgs
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply kernel customizations
+        run: |
+          cd pkgs
+          echo "[*] Kernel config location: kernel/build/config-amd64"
+          echo "[*] To customize: modify kernel/build/config-amd64 or use 'make kernel-menuconfig'"
+          echo "[*] Current build will use default kernel config"
+          
+          # Add custom kernel patches here if needed
+          # Example: echo "CONFIG_CUSTOM_OPTION=y" >> kernel/build/config-amd64
+          
+          echo "[OK] Kernel configuration ready"
+
+      - name: Build and push custom kernel
+        run: |
+          cd pkgs
+          echo "[*] Building custom kernel for amd64..."
+          make kernel \
+            REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }} \
+            PUSH=true \
+            PLATFORM=linux/amd64
+          
+          echo "[OK] Custom kernel built and pushed"
+
+      - name: Save kernel reference
+        run: |
+          echo "CUSTOM_KERNEL_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/kernel:$(cd pkgs && git describe --tags --always)" >> $GITHUB_OUTPUT
+        id: kernel
+
+    outputs:
+      kernel_image: ${{ steps.kernel.outputs.CUSTOM_KERNEL_IMAGE }}
 
   generate-configs:
     name: Generate Talos Configurations
@@ -233,8 +288,8 @@ jobs:
   build-iso:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    needs: [generate-configs, build-branding]
+    if: github.event_name != 'pull_request' && (success() || needs.build-kernel.result == 'skipped')
+    needs: [generate-configs, build-branding, build-kernel]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -269,11 +324,44 @@ jobs:
           
           echo "[OK] Branding overlay prepared"
       
+      - name: Build Talos kernel and initramfs (with custom kernel if available)
+        if: needs.build-kernel.result == 'success' && needs.build-kernel.outputs.kernel_image != ''
+        run: |
+          cd talos-src
+          echo "[*] Building Talos with custom kernel..."
+          make kernel initramfs \
+            PKG_KERNEL=${{ needs.build-kernel.outputs.kernel_image }} \
+            PLATFORM=linux/amd64
+          echo "[OK] Custom kernel and initramfs built"
+
+      - name: Build custom imager (with custom kernel if available)
+        if: needs.build-kernel.result == 'success' && needs.build-kernel.outputs.kernel_image != ''
+        run: |
+          cd talos-src
+          echo "[*] Building custom imager container..."
+          make imager \
+            PKG_KERNEL=${{ needs.build-kernel.outputs.kernel_image }} \
+            PLATFORM=linux/amd64 \
+            INSTALLER_ARCH=targetarch \
+            REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }} \
+            PUSH=true
+          echo "[OK] Custom imager built and pushed"
+      
       - name: Build Talos ISO with branding
         run: |
           cd talos-src
           echo "[*] Building custom Talos ISO using official Makefile..."
-          make iso PLATFORM=linux/amd64 2>&1 | grep -vE "^STEP|^--->|docker" || true
+          
+          if [ "${{ needs.build-kernel.result }}" == "success" ] && [ "${{ needs.build-kernel.outputs.kernel_image }}" != "" ]; then
+            echo "[*] Using custom kernel: ${{ needs.build-kernel.outputs.kernel_image }}"
+            make iso \
+              PLATFORM=linux/amd64 \
+              IMAGE_REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }}
+          else
+            echo "[*] Using standard Talos kernel with branding overlay"
+            make iso PLATFORM=linux/amd64
+          fi
+          
           echo "[OK] ISO build complete"
 
       - name: Copy and rename ISO
