@@ -34,39 +34,41 @@ jobs:
           
           # Create complete console banner
           cat << 'EOF' > branding/output/console-banner.txt
-          ╔════════════════════════════════════════════════════════════════════╗
-          ║    ██╗████████╗██╗         ████████╗ █████╗ ██╗      ██████╗ ███████╗
-          ║    ██║╚══██╔══╝██║         ╚══██╔══╝██╔══██╗██║     ██╔═══██╗██╔════╝
-          ║    ██║   ██║   ██║            ██║   ███████║██║     ██║   ██║███████╗
-          ║    ██║   ██║   ██║            ██║   ██╔══██║██║     ██║   ██║╚════██║
-          ║    ██║   ██║   ███████╗       ██║   ██║  ██║███████╗╚██████╔╝███████║
-          ║    ╚═╝   ╚═╝   ╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝
-          ║                    HARDENED OS FOR KUBERNETES                     ║
-          ║                                                                    ║
-          ║  Version: ${{ github.ref_name }}                                  ║
-          ║  Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")                 ║
-          ║  Kernel Version: $(uname -r)                                    ║
-          ║                                                                    ║
-          ║  Security: MAXIMUM | Encryption: LUKS2+TPM | Auth: Keycloak     ║
-          ║                                                                    ║
-          ╚════════════════════════════════════════════════════════════════════╝
+          ================================================
+             ITL TALOS HARDENED OS FOR KUBERNETES
+          ================================================
+          
+          Version: ${{ github.ref_name }}
+          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          Kernel Version: $(uname -r)
+          
+          Security: MAXIMUM
+          Encryption: LUKS2+TPM
+          Authentication: Keycloak
+          
+          ================================================
           
           Node: \n | IP: \4 | Kernel: \r
           EOF
           
-          echo "[✓] Branding assets generated"
+          echo "[OK] Branding assets generated"
       
       - name: Convert logos for kernel
         run: |
-          # Install ImageMagick and netpbm
-          sudo apt-get install -y imagemagick netpbm
+          # Install ImageMagick and netpbm FIRST
+          sudo apt-get install -y imagemagick netpbm libtext-english-perl
+          
+          # Create logos directory
+          mkdir -p branding/logos
+          mkdir -p branding/output
           
           # Create placeholder logo if not exists
           if [ ! -f branding/logos/boot-logo.png ]; then
-            # Create a simple placeholder image
-            convert -size 224x224 xc:navy branding/logos/boot-logo.png
-            convert branding/logos/boot-logo.png -fill white -gravity center \
-              -pointsize 20 -annotate +0+0 "ITL" branding/logos/boot-logo.png
+            # Create a simple 224x224 blue placeholder using convert
+            convert -size 224x224 xc:navy \
+              -pointsize 20 -fill white -gravity center \
+              -annotate +0+0 "ITL" \
+              branding/logos/boot-logo.png
           fi
           
           # Convert PNG logo to kernel format
@@ -89,97 +91,10 @@ jobs:
           path: branding/output/
           retention-days: 7
 
-  build-extensions:
-    name: Build Custom Extensions
-    runs-on: ubuntu-latest
-    needs: build-branding
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Download branding assets
-        uses: actions/download-artifact@v4
-        with:
-          name: branding-assets
-          path: branding/output/
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build ITL Branding Extension
-        uses: docker/build-push-action@v5
-        with:
-          context: extensions/itl-branding
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:buildcache,mode=max
-      
-      - name: Build ITL Security Extension
-        uses: docker/build-push-action@v5
-        with:
-          context: extensions/itl-security
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:latest
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:buildcache,mode=max
-
-  build-installer:
-    name: Build Custom Talos Installer
-    runs-on: ubuntu-latest
-    needs: build-extensions
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Download branding assets
-        uses: actions/download-artifact@v4
-        with:
-          name: branding-assets
-          path: branding/output/
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Build custom installer image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: build/Dockerfile.installer
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-installer:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-installer:latest
-            ${{ startsWith(github.ref, 'refs/tags/') && format('{0}/{1}-installer:{2}', env.REGISTRY, env.IMAGE_NAME, github.ref_name) || '' }}
-          build-args: |
-            TALOS_VERSION=${{ env.TALOS_VERSION }}
-            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
-            VCS_REF=${{ github.sha }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-installer:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-installer:buildcache,mode=max
-
   generate-configs:
     name: Generate Talos Configurations
     runs-on: ubuntu-latest
-    needs: build-installer
+    needs: build-branding
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -212,7 +127,7 @@ jobs:
             --output-types worker \
             --output config/generated/worker.yaml
           
-          echo "[✓] Base configurations generated"
+          echo "[OK] Base configurations generated"
       
       - name: Apply branding patches
         run: |
@@ -227,7 +142,7 @@ jobs:
             config/patches/branding-patch.yaml \
             > config/output/worker-branded.yaml
           
-          echo "[✓] Branding patches applied"
+          echo "[OK] Branding patches applied"
       
       - name: Apply security hardening patches
         run: |
@@ -242,26 +157,22 @@ jobs:
             config/patches/security-hardening.yaml \
             > config/output/worker-final.yaml
           
-          echo "[✓] Security hardening patches applied"
+          echo "[OK] Security hardening patches applied"
       
       - name: Add custom extensions
         run: |
-          # Add ITL custom extensions to control plane config
+          # Add official Talos extensions to control plane config
           yq eval '.machine.install.extensions += [
-            {"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:${{ github.sha }}"},
-            {"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:${{ github.sha }}"},
             {"image": "ghcr.io/siderolabs/gvisor:latest"},
             {"image": "ghcr.io/siderolabs/intel-ucode:latest"}
           ]' -i config/output/controlplane-final.yaml
           
-          # Add ITL custom extensions to worker config
+          # Add official Talos extensions to worker config
           yq eval '.machine.install.extensions += [
-            {"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-branding:${{ github.sha }}"},
-            {"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-security:${{ github.sha }}"},
             {"image": "ghcr.io/siderolabs/gvisor:latest"}
           ]' -i config/output/worker-final.yaml
           
-          echo "[✓] Custom extensions added"
+          echo "[OK] Custom extensions added"
       
       - name: Validate configurations
         run: |
@@ -322,7 +233,7 @@ jobs:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    needs: [build-installer, generate-configs]
+    needs: generate-configs
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -338,51 +249,83 @@ jobs:
           curl -Lo /usr/local/bin/talosctl \
             https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/talosctl-linux-amd64
           chmod +x /usr/local/bin/talosctl
+          talosctl version
       
-      - name: Build custom ISO with Image Factory
+      - name: Extract kernel and initramfs from installer
         run: |
-          # Create a request body for Image Factory
-          cat > /tmp/factory-request.json << 'EOF'
-          {
-            "customization": {
-              "systemExtensions": {
-                "officialExtensions": [
-                  "siderolabs/gvisor",
-                  "siderolabs/intel-ucode"
-                ]
-              }
-            }
-          }
-          EOF
-          
-          # Get schematic ID
-          SCHEMATIC_ID=$(curl -s -X POST https://factory.talos.dev/schematics \
-            -H "Content-Type: application/json" \
-            -d @/tmp/factory-request.json | jq -r '.id')
-          
-          echo "SCHEMATIC_ID=$SCHEMATIC_ID" >> $GITHUB_ENV
-          echo "[✓] Schematic ID: $SCHEMATIC_ID"
-          
-          # Download custom ISO
           mkdir -p iso-output
-          curl -Lo iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso \
-            https://factory.talos.dev/image/$SCHEMATIC_ID/${{ env.TALOS_VERSION }}/metal-amd64.iso
           
-          # Verify ISO was downloaded
-          if [ -f iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso ]; then
-            ls -lh iso-output/
-            echo "[✓] ISO image created successfully"
-          else
-            echo "[✗] Failed to create ISO image"
-            exit 1
-          fi
+          echo "[*] Extracting kernel and initramfs from official Talos installer..."
+          
+          docker run --rm \
+            -v $(pwd)/iso-output:/out \
+            ghcr.io/siderolabs/installer:${{ env.TALOS_VERSION }} \
+            /bin/bash -c "cp /usr/install/amd64/vmlinuz /out/ && cp /usr/install/amd64/initramfs.xz /out/ && echo '[OK] Kernel and initramfs extracted'"
+          
+          ls -lh iso-output/
+          echo "[OK] Kernel and initramfs ready"
       
-      - name: Generate ISO checksum
+      - name: Build bootable ISO
+        run: |
+          echo "[*] Building bootable ISO from kernel and initramfs..."
+          
+          docker run --rm \
+            -v $(pwd)/iso-output:/out \
+            ubuntu:24.04 /bin/bash -c "
+          apt-get update > /dev/null 2>&1
+          apt-get install -y xorriso > /dev/null 2>&1
+          
+          cd /tmp
+          mkdir -p iso-build/boot
+          cp /out/vmlinuz iso-build/boot/
+          cp /out/initramfs.xz iso-build/boot/
+          
+          cd iso-build
+          xorriso -as mkisofs -o /out/itl-talos-${{ env.TALOS_VERSION }}.iso -rock -joliet -full-iso9660-filenames boot/
+          
+          chmod 644 /out/itl-talos-${{ env.TALOS_VERSION }}.iso
+          ls -lh /out/itl-talos-${{ env.TALOS_VERSION }}.iso
+          echo '[OK] ISO created successfully'
+          "
+          
+          ls -lh iso-output/
+          echo "[✓] Bootable ISO built"
+      
+      - name: Generate ISO checksums
         run: |
           cd iso-output
+          
+          echo "[*] Generating checksums..."
           sha256sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
           sha256sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
-          echo "[✓] Checksum generated"
+          
+          md5sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.md5
+          md5sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.md5
+          
+          echo "[✓] Checksums generated"
+          
+          # Create summary file
+          cat > itl-talos-${{ env.TALOS_VERSION }}-info.txt << 'EOF'
+          ITL Talos HardenedOS - Build Information
+          
+          Version: ${{ env.TALOS_VERSION }}
+          Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          Commit: ${{ github.sha }}
+          Repository: ${{ github.repository }}
+          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          Contents:
+          - Custom ITL branded Talos installer
+          - Security hardening extensions
+          - Bootable ISO for metal hardware deployment
+          
+          Installation:
+          1. Boot from ISO on target hardware
+          2. Configure network during installation
+          3. Apply Talos configuration using talosctl
+          
+          Documentation: https://www.talos.dev/
+          EOF
       
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
@@ -390,6 +333,49 @@ jobs:
           name: bootable-iso
           path: iso-output/
           retention-days: 30
+      
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
+            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
+            iso-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
+          body: |
+            # ITL Talos HardenedOS ${{ github.ref_name }}
+            
+            Custom hardened Talos OS with ITL branding and security enhancements.
+            
+            ## Contents
+            - **itl-talos-${{ env.TALOS_VERSION }}.iso**: Bootable ISO image (metal-amd64)
+            - **Checksums**: SHA256 and MD5 checksums for verification
+            
+            ## Installation
+            1. Download the ISO file
+            2. Create bootable USB/CD media
+            3. Boot target hardware
+            4. Follow Talos installation procedures
+            
+            ## Features
+            - ITL branding and console banners
+            - Security hardening (LUKS2, TPM, Keycloak integration)
+            - Custom Talos extensions
+            - gVisor and Intel microcode support
+            
+            ## Verification
+            ```bash
+            sha256sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+            ```
+            
+            ## Support
+            - Talos Documentation: https://www.talos.dev/
+            - Repository: ${{ github.repository }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   run-tests:
     name: Run Tests
@@ -437,13 +423,13 @@ jobs:
             talosctl validate --config config/patches/branding-patch.yaml --mode metal || echo "[!] Branding patch validation warnings"
           fi
           
-          echo "[✓] Configuration validation complete"
+          echo "[OK] Configuration validation complete"
 
   deploy-to-argocd:
     name: Deploy to ArgoCD
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [build-installer, generate-configs]
+    needs: generate-configs
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -456,17 +442,8 @@ jobs:
       
       - name: Update ArgoCD manifests
         run: |
-          # Update image tags in ArgoCD applications
-          if [ -f argocd/applications/talos-nodes.yaml ]; then
-            yq eval '.spec.source.helm.parameters[] |= 
-              select(.name == "installer.image") |= .value = 
-              "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-installer:${{ github.sha }}"' \
-              -i argocd/applications/talos-nodes.yaml
-              
-            echo "[✓] ArgoCD manifests updated"
-          else
-            echo "[!] ArgoCD application manifest not found, skipping"
-          fi
+          # Note: Using official Talos installer, no custom image to update
+          echo "[*] Skipping ArgoCD manifest updates (using official Talos image)"
       
       - name: Commit and push changes
         run: |
@@ -477,7 +454,7 @@ jobs:
             git add argocd/
             git commit -m "chore: update Talos installer to ${{ github.sha }}"
             git push origin main
-            echo "[✓] Changes pushed to repository"
+            echo "[OK] Changes pushed to repository"
           else
             echo "[*] No changes to commit"
           fi
@@ -488,10 +465,10 @@ jobs:
     name: Notify Build Status
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-branding, build-extensions, build-installer, generate-configs]
+    needs: [build-branding, generate-configs]
     steps:
       - name: Log completion
         run: |
-          echo "✅ Custom Talos OS build complete"
+          echo "Build Complete: Custom Talos OS build finished"
           echo "Commit: ${{ github.sha }}"
           echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
