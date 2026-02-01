@@ -172,7 +172,7 @@ Custom Talos extensions build from here.
 
 **extensions/itl-branding/Dockerfile**
 - Creates console branding extension
-- Size: ~50MB
+- Size: 50MB
 - Includes ASCII art assets
 - Tagged as: itl-talos-hardened-os-branding
 
@@ -190,7 +190,7 @@ Custom Talos extensions build from here.
 
 **extensions/itl-security/Dockerfile**
 - Creates security extension
-- Size: ~100MB
+- Size: 100MB
 - Includes security tools
 - Tagged as: itl-talos-hardened-os-security
 
@@ -251,7 +251,7 @@ GitOps integration for continuous deployment.
 | Markdown Docs | 10 | 2000 | 90KB |
 | YAML (argocd) | 3 | 100 | 3KB |
 | Text Assets | 4 | 50 | 2KB |
-| **Total** | **26** | **~2900** | **~116KB** |
+| Total | 26 | 2900 | 116KB |
 
 ### By Directory
 
@@ -271,21 +271,21 @@ GitOps integration for continuous deployment.
 
 ```
 Dockerfile.branding (extension)
-        ↓
+    down arrow
 build-branding job
-        ↓
-       image
-        ↓
+    down arrow
+image
+    down arrow
 Dockerfile.installer (uses branding image)
-        ↓
+    down arrow
 build-installer job
-        ↓
-       image
-        ↓
+    down arrow
+image
+    down arrow
 generate-configs job
-        ↓
+    down arrow
 config/*.yaml patches
-        ↓
+    down arrow
 controlplane-final.yaml, worker-final.yaml
 ```
 
@@ -293,13 +293,13 @@ controlplane-final.yaml, worker-final.yaml
 
 ```
 branding-patch.yaml
-        ↓
+    down arrow
 config/output/controlplane-final.yaml
-        ↓
+    down arrow
 Kubernetes cluster
-        ↓
+    down arrow
 controlplane nodes
-        ↓
+    down arrow
 Console shows custom banner
 ```
 
@@ -307,43 +307,31 @@ Console shows custom banner
 
 ```
 security-hardening.yaml
-        ↓
+    down arrow
 config/output/controlplane-final.yaml
-        ↓
+    down arrow
 Kubernetes cluster
-        ↓
+    down arrow
 All nodes
-        ↓
+    down arrow
 Kernel hardening applied
 ```
 
 ## Dependency Graph
 
-```
 README.md (entry point)
-    ↓
-docs/01-QUICK_REFERENCE.md (quick start)
-    ↓
-docs/03-SIMPLIFIED_SETUP.md (setup details)
-    ↓
-docs/04-BUILD_PIPELINE.md (pipeline explanation)
-    ↓
-docs/05-QUICKSTART.md (deployment steps)
-    ↓
-docs/06-DEPLOYMENT.md (production setup)
-    ↓
-docs/07-CONTAINER_USAGE.md (container reference)
+- docs/01-QUICK_REFERENCE.md (quick start)
+  - docs/03-SIMPLIFIED_SETUP.md (setup details)
+    - docs/04-BUILD_PIPELINE.md (pipeline explanation)
+      - docs/05-QUICKSTART.md (deployment steps)
+        - docs/06-DEPLOYMENT.md (production setup)
+          - docs/07-CONTAINER_USAGE.md (container reference)
 
 .github/workflows/build-talos-hardened.yaml
-    ↓
-build/Dockerfile.*
-    ↓
-extensions/*/Dockerfile
-    ↓
-config/patches/*.yaml
-    ↓
-build/scripts/*
-```
+- build/Dockerfile.*
+  - extensions/*/Dockerfile
+    - config/patches/*.yaml
+      - build/scripts/*
 
 ## Key Files by Purpose
 
@@ -374,12 +362,10 @@ build/scripts/*
 ## Version Tracking
 
 **Main Version**: In README.md
-```markdown
-# ITL Talos - Hardened OS
-
-**Version**: 1.0.0
-**Talos**: v1.9.0
-**Kubernetes**: 1.29.0
+```
+Version: 1.0.0
+Talos: v1.9.0
+Kubernetes: 1.29.0
 ```
 
 **Release Tags**: Created as v*.* format
@@ -388,10 +374,9 @@ build/scripts/*
 - v2.0.0 - Major update
 
 **Workflow Version**: In .github/workflows/build-talos-hardened.yaml
-```yaml
-env:
-  TALOS_VERSION: v1.9.0
-  KUBE_VERSION: 1.29.0
+```
+TALOS_VERSION: v1.9.0
+KUBE_VERSION: 1.29.0
 ```
 
 ## Customization Checklist
