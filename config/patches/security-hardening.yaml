@@ -1,0 +1,181 @@
+# Talos Configuration Patch: Security Hardening
+# Applies security hardening, TPM 2.0, LUKS2, audit logging, and other security controls
+
+machine:
+  # Security API configuration
+  security:
+    kernel:
+      modules:
+        - name: tpm
+        - name: tpm_crb
+        - name: tpm_tis
+        - name: integrity
+        - name: audit
+    
+    capabilities:
+      kernel:
+        - CAP_CHOWN
+        - CAP_DAC_OVERRIDE
+        - CAP_FOWNER
+        - CAP_SETGID
+        - CAP_SETUID
+        - CAP_SETFCAP
+        - CAP_SETPCAP
+        - CAP_NET_RAW
+        - CAP_SYS_CHROOT
+        - CAP_KILL
+        - CAP_AUDIT_WRITE
+      
+      allowPrivilegeEscalation: false
+
+  # Kubelet configuration with security focus
+  kubelet:
+    # Read-only root filesystem
+    extraArgs:
+      read-only-port: "0"
+      protect-kernel-defaults: "true"
+      event-record-qps: "5"
+      feature-gates: "RotateKubeletServerCertificate=true"
+    
+    # Pod security policy enforcement
+    extraConfig:
+      eventRecordQPS: 5
+      protectKernelDefaults: true
+      rotateCertificates: true
+      serverTLSBootstrap: true
+
+  # System disk encryption with LUKS2 and TPM
+  disks:
+    - device: /dev/sda
+      partitions:
+        - size: 1048576
+          mountpoint: /boot
+        - size: 0
+          mountpoint: /
+          encrypt:
+            # Use LUKS2 for encryption
+            type: luks2
+            # TPM 2.0 sealing for automatic unlock
+            key_file:
+              source: tpm
+              # Recovery password required for manual unlock
+              requirements:
+                - tpm
+            # Cipher configuration
+            cipher: aes-xts-plain64
+            key_size: 512
+            pbkdf:
+              type: argon2id
+              iterations: 4
+              parallelism: 4
+              memory_mib: 512
+            # Sector size for better performance
+            sector_size: 4096
+
+  # Network security hardening
+  network:
+    interfaces:
+      - interface: eth0
+        # DHCP with strict requirements
+        dhcp: true
+        dhcp:
+          routeMetric: 1024
+
+  # Enable audit logging
+  sysctls:
+    # Kernel hardening parameters
+    kernel.kptr_restrict: "2"
+    kernel.dmesg_restrict: "1"
+    kernel.printk: "3 3 3 3"
+    kernel.unprivileged_bpf_disabled: "1"
+    kernel.unprivileged_userns_clone: "0"
+    kernel.yama.ptrace_scope: "2"
+    
+    # Network hardening
+    net.ipv4.conf.all.rp_filter: "1"
+    net.ipv4.conf.default.rp_filter: "1"
+    net.ipv4.icmp_echo_ignore_broadcasts: "1"
+    net.ipv4.icmp_ignore_bogus_error_responses: "1"
+    net.ipv4.tcp_syncookies: "1"
+    net.ipv4.conf.all.log_martians: "1"
+    net.ipv4.conf.default.log_martians: "1"
+    net.ipv6.conf.all.disable_ipv6: "1"
+    net.ipv6.conf.default.disable_ipv6: "1"
+    
+    # File system hardening
+    fs.protected_hardlinks: "1"
+    fs.protected_symlinks: "1"
+    fs.protected_regular: "2"
+    fs.protected_fifos: "2"
+    fs.suid_dumpable: "0"
+    fs.file-max: "2097152"
+
+  # SSH hardening (if using Talos SSH)
+  ssh:
+    enabled: true
+    # Only allow key-based authentication
+    passwordAuthentication: false
+    # Strong ciphers and algorithms
+    ciphers:
+      - chacha20-poly1305@openssh.com
+      - aes256-gcm@openssh.com
+    hostKeyAlgorithms:
+      - ssh-ed25519
+    keyExchangeAlgorithms:
+      - curve25519-sha256
+    macs:
+      - umac-128-etm@openssh.com
+
+  # Enable containerd security options
+  registries:
+    config:
+      ghcr.io:
+        # Additional TLS verification
+        tls:
+          insecureSkipVerify: false
+      docker.io:
+        tls:
+          insecureSkipVerify: false
+
+# Control plane configuration for security
+controlPlane:
+  # API server audit logging
+  apiServer:
+    extraArgs:
+      audit-log-path: /var/log/audit/audit.log
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+      # Encryption at rest
+      encryption-provider-config: /etc/kubernetes/encryption-config.yaml
+      # Network policy support
+      admission-control-config-file: /etc/kubernetes/admission-control.yaml
+
+  # Controller manager security
+  controllerManager:
+    extraArgs:
+      terminated-pod-gc-threshold: "50"
+      feature-gates: "RotateKubeletServerCertificate=true"
+
+  # Scheduler security
+  scheduler:
+    extraArgs:
+      profiling: "false"
+      feature-gates: "RotateKubeletServerCertificate=true"
+
+  # Etcd encryption
+  etcd:
+    extraArgs:
+      auto-compaction-mode: "revision"
+      auto-compaction-retention: "100"
+      cipher-suites: "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+
+# Pod security standards enforcement
+cluster:
+  # Pod security policy
+  podSecurityPolicy:
+    enforcedPolicyName: "restricted"
+  
+  # Network policies for segmentation
+  networkPolicy:
+    enabled: true

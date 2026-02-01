@@ -1,0 +1,209 @@
+# ArgoCD Application for ITL Talos HardenedOS
+# This application manages Talos cluster infrastructure via ArgoCD
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: itl-talos-nodes
+  namespace: argocd
+  # Finalizers ensure proper cleanup
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Project configuration
+  project: default
+  
+  # Source - where to get the configuration
+  source:
+    repoURL: https://github.com/ITlusions/ITL.Talos.HardenedOS.git
+    targetRevision: main
+    path: config/output
+    
+    # Use helm to deploy Talos configs
+    helm:
+      releaseName: itl-talos-hardened
+      values: |
+        # Installer image configuration
+        installer:
+          image: ghcr.io/itlusions/itl-talos-hardened-os-installer:latest
+          tag: latest
+        
+        # Cluster configuration
+        cluster:
+          endpoint: "https://api.itlusions.com:6443"
+          name: itl-cluster
+        
+        # Node configuration
+        nodes:
+          controlplane:
+            replicas: 3
+            resources:
+              requests:
+                cpu: "2"
+                memory: "4Gi"
+            storage:
+              size: "40Gi"
+          
+          worker:
+            replicas: 3
+            resources:
+              requests:
+                cpu: "4"
+                memory: "8Gi"
+            storage:
+              size: "60Gi"
+  
+  # Destination - where to deploy
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: talos-system
+  
+  # Sync policy
+  syncPolicy:
+    # Automatic sync on changes
+    automated:
+      prune: true
+      selfHeal: true
+      # Manual approval for infrastructure changes
+      # Set to false for immediate sync
+      syncOptions:
+        - PrunePropagationPolicy=foreground
+        - RespectIgnoreDifferences=true
+    
+    # Sync options
+    syncOptions:
+      # Only sync out of sync resources
+      - SkipDryRunOnMissingResource=true
+      # Wait for resources to be healthy
+      - PruneLast=true
+    
+    # Retry configuration
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  # Notification settings
+  info:
+    - name: "Talos Version"
+      value: "v1.9.0"
+    - name: "Branding"
+      value: "ITLusions"
+    - name: "Security Level"
+      value: "MAXIMUM"
+    - name: "Encryption"
+      value: "LUKS2 + TPM 2.0"
+    - name: "Documentation"
+      value: "https://docs.itlusions.com/talos"
+
+---
+# AppProject for RBAC
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: talos-infrastructure
+  namespace: argocd
+spec:
+  description: ITL Talos Infrastructure Management
+  
+  # Source repositories
+  sourceRepos:
+    - 'https://github.com/ITlusions/ITL.Talos.HardenedOS.git'
+    - 'https://github.com/ITlusions/*'
+  
+  # Destination clusters/namespaces
+  destinations:
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+    - namespace: talos-system
+      server: https://kubernetes.default.svc
+    - namespace: kube-system
+      server: https://kubernetes.default.svc
+  
+  # Cluster resources allowed
+  clusterResourceWhitelist:
+    - group: ''
+      kind: Namespace
+    - group: infrastructure.cluster.x-k8s.io
+      kind: '*'
+    - group: bootstrap.cluster.x-k8s.io
+      kind: '*'
+  
+  # Policies
+  roles:
+    - name: admin
+      policies:
+        - p, proj:talos-infrastructure:admin, applications, *, talos-infrastructure/*, allow
+      groups:
+        - talos-admins
+    
+    - name: read-only
+      policies:
+        - p, proj:talos-infrastructure:read-only, applications, get, talos-infrastructure/*, allow
+      groups:
+        - talos-readers
+
+---
+# ApplicationSet for multi-environment deployment
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: itl-talos-environments
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: production
+            endpoint: https://api.itlusions.com:6443
+            version: v1.0.0
+            environment: prod
+          - name: staging
+            endpoint: https://staging-api.itlusions.com:6443
+            version: v1.0.0-rc.1
+            environment: staging
+          - name: development
+            endpoint: https://dev-api.itlusions.com:6443
+            version: v1.0.0-dev
+            environment: dev
+  
+  template:
+    metadata:
+      name: 'itl-talos-{{name}}'
+      labels:
+        environment: '{{environment}}'
+        managed-by: argocd
+    spec:
+      project: talos-infrastructure
+      
+      source:
+        repoURL: https://github.com/ITlusions/ITL.Talos.HardenedOS.git
+        targetRevision: '{{version}}'
+        path: config/output
+        helm:
+          releaseName: itl-talos-{{name}}
+          values: |
+            environment: {{environment}}
+            installer:
+              image: ghcr.io/itlusions/itl-talos-hardened-os-installer:{{version}}
+            cluster:
+              endpoint: "{{endpoint}}"
+      
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: talos-system-{{name}}
+      
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+        retry:
+          limit: 5
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m

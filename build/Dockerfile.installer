@@ -1,0 +1,43 @@
+# Build custom Talos Linux installer with ITLusions branding and security hardening
+# This Dockerfile extends the official Talos installer with custom assets and configurations
+
+ARG TALOS_VERSION=v1.9.0
+FROM ghcr.io/siderolabs/installer:${TALOS_VERSION}
+
+# Add metadata
+LABEL org.opencontainers.image.title="ITL.Talos.HardenedOS Installer"
+LABEL org.opencontainers.image.description="Custom Talos Linux installer with ITlusions branding and security hardening"
+LABEL org.opencontainers.image.vendor="ITlusions"
+LABEL org.opencontainers.image.url="https://github.com/ITlusions/ITL.Talos.HardenedOS"
+LABEL org.opencontainers.image.documentation="https://docs.itlusions.com/talos"
+
+# Build arguments
+ARG BUILD_DATE
+ARG VCS_REF
+ARG TALOS_VERSION
+
+LABEL org.opencontainers.image.created=${BUILD_DATE}
+LABEL org.opencontainers.image.revision=${VCS_REF}
+LABEL org.opencontainers.image.version=${TALOS_VERSION}
+
+# Copy branding assets to the installer
+# Console banner for login and boot messages
+COPY branding/output/console-banner.txt /etc/issue
+COPY branding/output/console-banner.txt /etc/issue.net
+
+# Boot logo for kernel display
+COPY branding/output/boot-logo.png /usr/share/talos/logo.png
+COPY branding/output/logo_custom_clut224.ppm /usr/share/talos/logo.ppm
+
+# Copy custom scripts
+COPY build/scripts/branding-init.sh /usr/local/bin/branding-init
+COPY build/scripts/installer-entrypoint.sh /entrypoint.sh
+
+# Ensure scripts are executable
+RUN chmod +x /usr/local/bin/branding-init && \
+    chmod +x /entrypoint.sh && \
+    echo "[✓] Custom installer prepared" && \
+    /usr/local/bin/branding-init
+
+# Use custom entrypoint
+ENTRYPOINT ["/entrypoint.sh"]

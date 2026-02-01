@@ -1,0 +1,52 @@
+# Generated files and build outputs
+branding/output/
+config/generated/
+config/output/*.yaml
+iso-output/
+
+# Local development
+.env
+.env.local
+*.log
+*.tmp
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Docker and container files
+.dockerignore
+docker-compose.override.yml
+
+# Kubernetes and Talos files
+kubeconfig
+talosconfig
+.kube/
+.talos/
+
+# Build cache
+.buildx/
+.docker/
+
+# Testing
+test-results/
+coverage/
+
+# Secrets and credentials
+secrets.yaml
+*.key
+*.crt
+.ssh/
+
+# Archives
+*.tar
+*.tar.gz
+*.zip
+
+# OS files
+Thumbs.db
+.directory

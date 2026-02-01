@@ -1,0 +1,64 @@
+# Talos Configuration Patch: ITL Branding
+# Applies custom ITLusions branding to console and kernel output
+
+machine:
+  files:
+    - content: |
+        ╔════════════════════════════════════════════════════════════════════╗
+        ║    ██╗████████╗██╗         ████████╗ █████╗ ██╗      ██████╗ ███████╗
+        ║    ██║╚══██╔══╝██║         ╚══██╔══╝██╔══██╗██║     ██╔═══██╗██╔════╝
+        ║    ██║   ██║   ██║            ██║   ███████║██║     ██║   ██║███████╗
+        ║    ██║   ██║   ██║            ██║   ██╔══██║██║     ██║   ██║╚════██║
+        ║    ██║   ██║   ███████╗       ██║   ██║  ██║███████╗╚██████╔╝███████║
+        ║    ╚═╝   ╚═╝   ╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝
+        ║                    HARDENED OS FOR KUBERNETES                     ║
+        ║                                                                    ║
+        ║  Talos Linux - Secure Kubernetes Operating System                ║
+        ║  Developed by ITLusions for Enterprise Kubernetes                ║
+        ║                                                                    ║
+        ║  Security Level: MAXIMUM                                          ║
+        ║  Encryption: LUKS2 + TPM 2.0                                      ║
+        ║  Authentication: Keycloak OIDC                                    ║
+        ║                                                                    ║
+        ║  Node Information:                                                ║
+        ║  Hostname: \n | IP Address: \4 | Kernel: \r                      ║
+        ║                                                                    ║
+        ║  For support, visit: https://docs.itlusions.com/talos            ║
+        ║  Report issues at: https://github.com/ITlusions/                 ║
+        ║                                                                    ║
+        ╚════════════════════════════════════════════════════════════════════╝
+      path: /etc/issue
+      permissions: 0644
+      op: create
+    
+    - content: |
+        ╔════════════════════════════════════════════════════════════════════╗
+        ║    ██╗████████╗██╗         ████████╗ █████╗ ██╗      ██████╗ ███████╗
+        ║    ██║╚══██╔══╝██║         ╚══██╔══╝██╔══██╗██║     ██╔═══██╗██╔════╝
+        ║    ██║   ██║   ██║            ██║   ███████║██║     ██║   ██║███████╗
+        ║    ██║   ██║   ██║            ██║   ██╔══██║██║     ██║   ██║╚════██║
+        ║    ██║   ██║   ███████╗       ██║   ██║  ██║███████╗╚██████╔╝███████║
+        ║    ╚═╝   ╚═╝   ╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝
+        ║                    HARDENED OS FOR KUBERNETES                     ║
+        ╚════════════════════════════════════════════════════════════════════╝
+      path: /etc/issue.net
+      permissions: 0644
+      op: create
+    
+    - content: |
+        # ITL Talos HardenedOS Branding Configuration
+        # Generated at build time with custom branding
+        
+        BRANDING_VENDOR="ITLusions"
+        BRANDING_PRODUCT="Talos HardenedOS"
+        BRANDING_ENVIRONMENT="Enterprise"
+        BRANDING_SECURITY_LEVEL="MAXIMUM"
+      path: /etc/itl-branding
+      permissions: 0644
+      op: create
+
+  # Add branding and security extensions
+  install:
+    extensions:
+      - image: ghcr.io/itlusions/itl-talos-hardened-os-branding:latest
+      - image: ghcr.io/itlusions/itl-talos-hardened-os-security:latest
