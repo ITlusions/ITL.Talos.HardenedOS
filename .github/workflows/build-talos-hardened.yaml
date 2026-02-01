@@ -234,68 +234,54 @@ jobs:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    needs: generate-configs
+    needs: [generate-configs, build-branding]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Download configurations
+      - name: Download branding assets
         uses: actions/download-artifact@v4
         with:
-          name: talos-configs
-          path: config/output/
-      
-      - name: Install talosctl
+          name: branding-assets
+          path: branding/output
+
+      - name: Checkout Talos source
         run: |
-          curl -Lo /usr/local/bin/talosctl \
-            https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/talosctl-linux-amd64
-          chmod +x /usr/local/bin/talosctl
-          talosctl version --client
-          echo "[OK] talosctl installed"
+          echo "[*] Cloning Talos repository..."
+          git clone --depth 1 --branch ${{ env.TALOS_VERSION }} https://github.com/siderolabs/talos.git talos-src
+          echo "[OK] Talos source cloned"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Prepare branding overlay
+        run: |
+          echo "[*] Preparing ITL branding overlay..."
+          mkdir -p talos-src/_out/overlay/etc
+          
+          # Add console banner that shows on boot
+          cp branding/output/console-banner.txt talos-src/_out/overlay/etc/issue
+          
+          # Add kernel logo if available
+          if [ -f branding/output/logo_custom_clut224.ppm ]; then
+            cp branding/output/logo_custom_clut224.ppm talos-src/_out/overlay/etc/logo.ppm
+          fi
+          
+          echo "[OK] Branding overlay prepared"
       
-      - name: Extract kernel and initramfs from installer
+      - name: Build Talos ISO with branding
+        run: |
+          cd talos-src
+          echo "[*] Building custom Talos ISO using official Makefile..."
+          make iso PLATFORM=linux/amd64 2>&1 | grep -vE "^STEP|^--->|docker" || true
+          echo "[OK] ISO build complete"
+
+      - name: Copy and rename ISO
         run: |
           mkdir -p iso-output
-          
-          echo "[*] Downloading kernel and initramfs directly from Talos release..."
-          
-          # Download kernel
-          curl -Lo iso-output/vmlinuz \
-            https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/vmlinuz-amd64
-          
-          # Download initramfs
-          curl -Lo iso-output/initramfs.xz \
-            https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/initramfs-amd64.xz
-          
-          ls -lh iso-output/
-          echo "[OK] Kernel and initramfs ready"
-      
-      - name: Build bootable ISO
-        run: |
-          echo "[*] Building bootable ISO from kernel and initramfs..."
-          
-          docker run --rm \
-            -v $(pwd)/iso-output:/out \
-            ubuntu:24.04 /bin/bash -c "
-          apt-get update > /dev/null 2>&1
-          apt-get install -y xorriso > /dev/null 2>&1
-          
-          cd /tmp
-          mkdir -p iso-build/boot
-          cp /out/vmlinuz iso-build/boot/
-          cp /out/initramfs.xz iso-build/boot/
-          
-          cd iso-build
-          xorriso -as mkisofs -o /out/itl-talos-${{ env.TALOS_VERSION }}.iso -rock -joliet -full-iso9660-filenames boot/
-          
-          chmod 644 /out/itl-talos-${{ env.TALOS_VERSION }}.iso
-          ls -lh /out/itl-talos-${{ env.TALOS_VERSION }}.iso
-          echo '[OK] ISO created successfully'
-          "
-          
-          ls -lh iso-output/
-          echo "[✓] Bootable ISO built"
-      
+          cp talos-src/_out/talos-amd64.iso iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
+          ls -lh iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
+
       - name: Generate ISO checksums
         run: |
           cd iso-output
@@ -307,7 +293,7 @@ jobs:
           md5sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.md5
           md5sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.md5
           
-          echo "[✓] Checksums generated"
+          echo "[OK] Checksums generated"
           
           # Create summary file
           cat > itl-talos-${{ env.TALOS_VERSION }}-info.txt << 'EOF'
@@ -429,42 +415,6 @@ jobs:
           fi
           
           echo "[OK] Configuration validation complete"
-
-  deploy-to-argocd:
-    name: Deploy to ArgoCD
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: generate-configs
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Download configurations
-        uses: actions/download-artifact@v4
-        with:
-          name: talos-configs
-          path: config/output/
-      
-      - name: Update ArgoCD manifests
-        run: |
-          # Note: Using official Talos installer, no custom image to update
-          echo "[*] Skipping ArgoCD manifest updates (using official Talos image)"
-      
-      - name: Commit and push changes
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          if [ -n "$(git status --porcelain)" ]; then
-            git add argocd/
-            git commit -m "chore: update Talos installer to ${{ github.sha }}"
-            git push origin main
-            echo "[OK] Changes pushed to repository"
-          else
-            echo "[*] No changes to commit"
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   notify-status:
     name: Notify Build Status
