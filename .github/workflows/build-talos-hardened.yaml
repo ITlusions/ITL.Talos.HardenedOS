@@ -257,12 +257,15 @@ jobs:
         run: |
           mkdir -p iso-output
           
-          echo "[*] Extracting kernel and initramfs from official Talos installer..."
+          echo "[*] Downloading kernel and initramfs directly from Talos release..."
           
-          docker run --rm \
-            -v $(pwd)/iso-output:/out \
-            ghcr.io/siderolabs/installer:${{ env.TALOS_VERSION }} \
-            /bin/bash -c "cp /usr/install/amd64/vmlinuz /out/ && cp /usr/install/amd64/initramfs.xz /out/ && echo '[OK] Kernel and initramfs extracted'"
+          # Download kernel
+          curl -Lo iso-output/vmlinuz \
+            https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/vmlinuz-amd64
+          
+          # Download initramfs
+          curl -Lo iso-output/initramfs.xz \
+            https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/initramfs-amd64.xz
           
           ls -lh iso-output/
           echo "[OK] Kernel and initramfs ready"
