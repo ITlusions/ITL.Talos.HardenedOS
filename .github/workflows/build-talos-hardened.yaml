@@ -158,6 +158,9 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: [generate-configs]
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Install build dependencies
         run: |
           echo "[*] Installing dependencies..."
@@ -172,9 +175,16 @@ jobs:
           ./build-simple.sh
           echo "[OK] Build script completed"
           
+          # Verify ISO was created
+          if [ ! -f "itl-talos-${{ env.TALOS_VERSION }}.iso" ]; then
+            echo "[ERROR] ISO file was not created!"
+            exit 1
+          fi
+          
           # Copy output to expected location
           mkdir -p build-output
-          cp -v itl-talos-${{ env.TALOS_VERSION }}.iso build-output/ || true
+          cp -v itl-talos-${{ env.TALOS_VERSION }}.iso build-output/
+          echo "[OK] ISO copied to build-output/"
 
       - name: Generate ISO checksums
         run: |
@@ -229,7 +239,7 @@ jobs:
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
-            iso-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
+            build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
           body: |
             # ITL Talos HardenedOS ${{ github.ref_name }}
             
