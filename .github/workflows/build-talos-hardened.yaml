@@ -14,139 +14,9 @@ env:
   BUILD_CUSTOM_KERNEL: false
 
 jobs:
-  build-branding:
-    name: Build Branding Assets
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Generate ASCII art banners
-        run: |
-          # Install figlet for text to ASCII
-          sudo apt-get update
-          sudo apt-get install -y figlet toilet
-          
-          # Create output directory if not exists
-          mkdir -p branding/output
-          
-          # Generate banners
-          figlet -f standard "ITL TALOS" > branding/output/title.txt
-          toilet -f future "HARDENED OS" >> branding/output/title.txt
-          
-          # Create complete console banner
-          cat << 'EOF' > branding/output/console-banner.txt
-          ================================================
-             ITL TALOS HARDENED OS FOR KUBERNETES
-          ================================================
-          
-          Version: ${{ github.ref_name }}
-          Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
-          Kernel Version: $(uname -r)
-          
-          Security: MAXIMUM
-          Encryption: LUKS2+TPM
-          Authentication: Keycloak
-          
-          ================================================
-          
-          Node: \n | IP: \4 | Kernel: \r
-          EOF
-          
-          echo "[OK] Branding assets generated"
-      
-      - name: Convert logos for kernel
-        run: |
-          # Install ImageMagick and netpbm FIRST
-          sudo apt-get install -y imagemagick netpbm libtext-english-perl
-          
-          # Create logos directory
-          mkdir -p branding/logos
-          mkdir -p branding/output
-          
-          # Create placeholder logo if not exists
-          if [ ! -f branding/logos/boot-logo.png ]; then
-            # Create a simple 224x224 blue placeholder using convert
-            convert -size 224x224 xc:navy \
-              -pointsize 20 -fill white -gravity center \
-              -annotate +0+0 "ITL" \
-              branding/logos/boot-logo.png
-          fi
-          
-          # Convert PNG logo to kernel format
-          convert branding/logos/boot-logo.png \
-                  -resize 224x224 \
-                  branding/output/boot-logo.png
-          
-          convert branding/output/boot-logo.png \
-                  branding/output/boot-logo.ppm
-          
-          ppmquant 224 branding/output/boot-logo.ppm | \
-            pnmtoplainpnm > branding/output/logo_custom_clut224.ppm
-          
-          echo "[✓] Logos converted for kernel"
-      
-      - name: Upload branding artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: branding-assets
-          path: branding/output/
-          retention-days: 7
-
-  build-kernel:
-    name: Build Custom Kernel
-    runs-on: ubuntu-latest
-    if: vars.BUILD_CUSTOM_KERNEL == 'true'
-    steps:
-      - name: Checkout pkgs repository
-        uses: actions/checkout@v4
-        with:
-          repository: siderolabs/pkgs
-          ref: ${{ env.PKGS_VERSION }}
-          path: pkgs
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Apply kernel customizations
-        run: |
-          cd pkgs
-          echo "[*] Kernel config location: kernel/build/config-amd64"
-          echo "[*] To customize: modify kernel/build/config-amd64 or use 'make kernel-menuconfig'"
-          echo "[*] Current build will use default kernel config"
-          
-          # Add custom kernel patches here if needed
-          # Example: echo "CONFIG_CUSTOM_OPTION=y" >> kernel/build/config-amd64
-          
-          echo "[OK] Kernel configuration ready"
-
-      - name: Build and push custom kernel
-        run: |
-          cd pkgs
-          echo "[*] Building custom kernel for amd64..."
-          make kernel \
-            REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }} \
-            PUSH=true \
-            PLATFORM=linux/amd64
-          
-          echo "[OK] Custom kernel built and pushed"
-
-      - name: Save kernel reference
-        run: |
-          echo "CUSTOM_KERNEL_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/kernel:$(cd pkgs && git describe --tags --always)" >> $GITHUB_OUTPUT
-        id: kernel
-
-    outputs:
-      kernel_image: ${{ steps.kernel.outputs.CUSTOM_KERNEL_IMAGE }}
-
   generate-configs:
     name: Generate Talos Configurations
     runs-on: ubuntu-latest
-    needs: build-branding
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -286,17 +156,8 @@ jobs:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    needs: [generate-configs, build-branding]
+    needs: [generate-configs]
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Download branding assets
-        uses: actions/download-artifact@v4
-        with:
-          name: branding-assets
-          path: branding/output
-
       - name: Install build dependencies
         run: |
           echo "[*] Installing dependencies..."
@@ -304,101 +165,16 @@ jobs:
           sudo apt-get install -y xorriso cpio zstd wget
           echo "[OK] Dependencies installed"
 
-      - name: Build custom ISO with branding
+      - name: Run build-simple.sh to create ISO
         run: |
-          echo "[*] Building Talos ISO with ITL branding..."
+          echo "[*] Running build-simple.sh script..."
+          chmod +x ./build-simple.sh
+          ./build-simple.sh
+          echo "[OK] Build script completed"
+          
+          # Copy output to expected location
           mkdir -p build-output
-          cd build-output
-          
-          # Download official ISO
-          echo "[*] Downloading official Talos ISO..."
-          wget -q --show-progress \
-            "https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/metal-amd64.iso" \
-            -O "talos-${{ env.TALOS_VERSION }}-amd64.iso"
-          echo "[OK] ISO downloaded"
-          
-          # Extract boot files only
-          echo "[*] Extracting boot files..."
-          mkdir -p iso-boot iso-work
-          xorriso -osirrox on -indev "talos-${{ env.TALOS_VERSION }}-amd64.iso" -extract /boot iso-boot/ 2>&1 | tail -3
-          echo "[OK] Boot files extracted"
-          
-          # Find and extract initramfs
-          INITRAMFS=$(find iso-boot -name "initramfs*" | head -1)
-          if [ -z "$INITRAMFS" ]; then
-            echo "[ERROR] Initramfs not found!"
-            exit 1
-          fi
-          
-          echo "[*] Found initramfs: $INITRAMFS"
-          
-          # Detect compression format and extract
-          mkdir -p initramfs-work
-          cd initramfs-work
-          
-          if file "../$INITRAMFS" | grep -q "Zstandard"; then
-            echo "[*] Extracting zstd initramfs..."
-            zstd -dc "../$INITRAMFS" | cpio -idm 2>/dev/null || true
-            COMPRESS="zstd -19 -T0"
-            EXT="zst"
-          elif file "../$INITRAMFS" | grep -q "xz"; then
-            echo "[*] Extracting xz initramfs..."
-            xz -dc "../$INITRAMFS" | cpio -idm 2>/dev/null || true
-            COMPRESS="xz --check=crc32 --lzma2=dict=1MiB"
-            EXT="xz"
-          else
-            echo "[*] Extracting gzip initramfs..."
-            zcat "../$INITRAMFS" | cpio -idm 2>/dev/null || true
-            COMPRESS="gzip -9"
-            EXT="gz"
-          fi
-          
-          echo "[OK] Initramfs extracted"
-          
-          # Inject branding
-          echo "[*] Injecting ITL branding..."
-          mkdir -p etc
-          cp ../../../branding/output/console-banner.txt etc/issue
-          echo "[OK] Branding injected"
-          
-          # Repack initramfs
-          echo "[*] Repacking initramfs..."
-          find . -print0 | cpio --null -o -H newc 2>/dev/null | eval "$COMPRESS" > "../initramfs-branded.$EXT"
-          cd ..
-          
-          echo "[OK] Branded initramfs created"
-          
-          # Extract full ISO structure
-          echo "[*] Extracting full ISO structure..."
-          xorriso -osirrox on -indev "talos-${{ env.TALOS_VERSION }}-amd64.iso" -extract / iso-work/ 2>&1 | tail -3
-          echo "[OK] ISO structure extracted"
-          
-          # Replace initramfs
-          echo "[*] Replacing initramfs with branded version..."
-          cp "initramfs-branded.$EXT" "iso-work/boot/initramfs-branded.$EXT"
-          
-          # Rebuild ISO
-          echo "[*] Rebuilding ISO with branding..."
-          ISO_NAME="itl-talos-${{ env.TALOS_VERSION }}.iso"
-          xorriso -as mkisofs \
-            -iso-level 3 \
-            -volid "ITL-TALOS-v1_9_0" \
-            -eltorito-boot boot.catalog \
-            -no-emul-boot \
-            -eltorito-alt-boot \
-            -e efi.img \
-            -no-emul-boot \
-            -isohybrid-gpt-basdat \
-            -output "$ISO_NAME" \
-            iso-work/ 2>&1 | tail -10
-          
-          if [ ! -f "$ISO_NAME" ]; then
-            echo "[ERROR] ISO build failed!"
-            exit 1
-          fi
-          
-          echo "[OK] ISO build complete"
-          ls -lh "$ISO_NAME"
+          cp -v itl-talos-${{ env.TALOS_VERSION }}.iso build-output/ || true
 
       - name: Generate ISO checksums
         run: |
@@ -540,7 +316,7 @@ jobs:
     name: Notify Build Status
     runs-on: ubuntu-latest
     if: always()
-    needs: [build-branding, generate-configs]
+    needs: [generate-configs]
     steps:
       - name: Log completion
         run: |
