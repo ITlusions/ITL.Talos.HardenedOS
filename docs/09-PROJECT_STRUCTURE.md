@@ -45,16 +45,11 @@ ITL.Talos.HardenedOS/
 │       ├── Dockerfile
 │       ├── kernel-params.txt
 │       └── security-config.yaml
-├── branding/                    Branding assets
-│   ├── templates/
-│   │   └── console-banner.txt
-│   └── logos/
-│       └── itl-logo.txt
-└── argocd/                      Optional: GitOps integration
-    ├── kustomization.yaml
-    └── overlays/
-        ├── dev/
-        └── prod/
+└── branding/                    Branding assets
+    ├── templates/
+    │   └── console-banner.txt
+    └── logos/
+        └── itl-logo.txt
 ```
 
 ## File Descriptions
@@ -220,25 +215,6 @@ Non-code branding assets.
 - Used in documentation
 - 40x20 characters
 
-### ArgoCD Directory: /argocd (Optional)
-
-GitOps integration for continuous deployment.
-
-**argocd/kustomization.yaml**
-- Kustomize configuration
-- Defines Kubernetes overlays
-- Base deployment manifest
-
-**argocd/overlays/dev/kustomization.yaml**
-- Development overlay
-- Dev-specific settings
-- Overrides base config
-
-**argocd/overlays/prod/kustomization.yaml**
-- Production overlay
-- Production settings
-- High-availability config
-
 ## Code Statistics
 
 ### By Type
@@ -249,9 +225,8 @@ GitOps integration for continuous deployment.
 | Dockerfile | 3 | 400 | 12KB |
 | Shell Scripts | 3 | 150 | 4KB |
 | Markdown Docs | 10 | 2000 | 90KB |
-| YAML (argocd) | 3 | 100 | 3KB |
 | Text Assets | 4 | 50 | 2KB |
-| Total | 26 | 2900 | 116KB |
+| Total | 23 | 2800 | 113KB |
 
 ### By Directory
 
@@ -262,7 +237,6 @@ GitOps integration for continuous deployment.
 | /config | 5 | Configuration |
 | /extensions | 6 | Talos extensions |
 | /branding | 4 | Assets |
-| /argocd | 3 | GitOps |
 | root | 3 | Project metadata |
 
 ## File Relationships
@@ -450,6 +424,6 @@ To customize this project:
 
 **Version**: 1.0.0
 **Last Updated**: 2024
-**Total Files**: 26
-**Total Size**: 116KB (without ISO/images)
+**Total Files**: 23
+**Total Size**: 113KB (without ISO/images)
 

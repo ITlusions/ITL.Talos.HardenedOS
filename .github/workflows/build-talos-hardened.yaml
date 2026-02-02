@@ -105,9 +105,6 @@ jobs:
           ref: ${{ env.PKGS_VERSION }}
           path: pkgs
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -288,8 +285,8 @@ jobs:
   build-iso:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && (success() || needs.build-kernel.result == 'skipped')
-    needs: [generate-configs, build-branding, build-kernel]
+    if: github.event_name != 'pull_request'
+    needs: [generate-configs, build-branding]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -300,86 +297,121 @@ jobs:
           name: branding-assets
           path: branding/output
 
-      - name: Checkout Talos source
+      - name: Install build dependencies
         run: |
-          echo "[*] Cloning Talos repository..."
-          git clone --depth 1 --branch ${{ env.TALOS_VERSION }} https://github.com/siderolabs/talos.git talos-src
-          echo "[OK] Talos source cloned"
+          echo "[*] Installing dependencies..."
+          sudo apt-get update -qq
+          sudo apt-get install -y xorriso cpio zstd wget
+          echo "[OK] Dependencies installed"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Prepare branding overlay
+      - name: Build custom ISO with branding
         run: |
-          echo "[*] Preparing ITL branding overlay..."
-          mkdir -p talos-src/_out/overlay/etc
+          echo "[*] Building Talos ISO with ITL branding..."
+          mkdir -p build-output
+          cd build-output
           
-          # Add console banner that shows on boot
-          cp branding/output/console-banner.txt talos-src/_out/overlay/etc/issue
+          # Download official ISO
+          echo "[*] Downloading official Talos ISO..."
+          wget -q --show-progress \
+            "https://github.com/siderolabs/talos/releases/download/${{ env.TALOS_VERSION }}/metal-amd64.iso" \
+            -O "talos-${{ env.TALOS_VERSION }}-amd64.iso"
+          echo "[OK] ISO downloaded"
           
-          # Add kernel logo if available
-          if [ -f branding/output/logo_custom_clut224.ppm ]; then
-            cp branding/output/logo_custom_clut224.ppm talos-src/_out/overlay/etc/logo.ppm
+          # Extract boot files only
+          echo "[*] Extracting boot files..."
+          mkdir -p iso-boot iso-work
+          xorriso -osirrox on -indev "talos-${{ env.TALOS_VERSION }}-amd64.iso" -extract /boot iso-boot/ 2>&1 | tail -3
+          echo "[OK] Boot files extracted"
+          
+          # Find and extract initramfs
+          INITRAMFS=$(find iso-boot -name "initramfs*" | head -1)
+          if [ -z "$INITRAMFS" ]; then
+            echo "[ERROR] Initramfs not found!"
+            exit 1
           fi
           
-          echo "[OK] Branding overlay prepared"
-      
-      - name: Build Talos kernel and initramfs (with custom kernel if available)
-        if: needs.build-kernel.result == 'success' && needs.build-kernel.outputs.kernel_image != ''
-        run: |
-          cd talos-src
-          echo "[*] Building Talos with custom kernel..."
-          make kernel initramfs \
-            PKG_KERNEL=${{ needs.build-kernel.outputs.kernel_image }} \
-            PLATFORM=linux/amd64
-          echo "[OK] Custom kernel and initramfs built"
-
-      - name: Build custom imager (with custom kernel if available)
-        if: needs.build-kernel.result == 'success' && needs.build-kernel.outputs.kernel_image != ''
-        run: |
-          cd talos-src
-          echo "[*] Building custom imager container..."
-          make imager \
-            PKG_KERNEL=${{ needs.build-kernel.outputs.kernel_image }} \
-            PLATFORM=linux/amd64 \
-            INSTALLER_ARCH=targetarch \
-            REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }} \
-            PUSH=true
-          echo "[OK] Custom imager built and pushed"
-      
-      - name: Build Talos ISO with branding
-        run: |
-          cd talos-src
-          echo "[*] Building custom Talos ISO using official Makefile..."
+          echo "[*] Found initramfs: $INITRAMFS"
           
-          if [ "${{ needs.build-kernel.result }}" == "success" ] && [ "${{ needs.build-kernel.outputs.kernel_image }}" != "" ]; then
-            echo "[*] Using custom kernel: ${{ needs.build-kernel.outputs.kernel_image }}"
-            make iso \
-              PLATFORM=linux/amd64 \
-              IMAGE_REGISTRY=${{ env.REGISTRY }}/${{ github.repository_owner }}
+          # Detect compression format and extract
+          mkdir -p initramfs-work
+          cd initramfs-work
+          
+          if file "../$INITRAMFS" | grep -q "Zstandard"; then
+            echo "[*] Extracting zstd initramfs..."
+            zstd -dc "../$INITRAMFS" | cpio -idm 2>/dev/null || true
+            COMPRESS="zstd -19 -T0"
+            EXT="zst"
+          elif file "../$INITRAMFS" | grep -q "xz"; then
+            echo "[*] Extracting xz initramfs..."
+            xz -dc "../$INITRAMFS" | cpio -idm 2>/dev/null || true
+            COMPRESS="xz --check=crc32 --lzma2=dict=1MiB"
+            EXT="xz"
           else
-            echo "[*] Using standard Talos kernel with branding overlay"
-            make iso PLATFORM=linux/amd64
+            echo "[*] Extracting gzip initramfs..."
+            zcat "../$INITRAMFS" | cpio -idm 2>/dev/null || true
+            COMPRESS="gzip -9"
+            EXT="gz"
+          fi
+          
+          echo "[OK] Initramfs extracted"
+          
+          # Inject branding
+          echo "[*] Injecting ITL branding..."
+          mkdir -p etc
+          cp ../../../branding/output/console-banner.txt etc/issue
+          echo "[OK] Branding injected"
+          
+          # Repack initramfs
+          echo "[*] Repacking initramfs..."
+          find . -print0 | cpio --null -o -H newc 2>/dev/null | eval "$COMPRESS" > "../initramfs-branded.$EXT"
+          cd ..
+          
+          echo "[OK] Branded initramfs created"
+          
+          # Extract full ISO structure
+          echo "[*] Extracting full ISO structure..."
+          xorriso -osirrox on -indev "talos-${{ env.TALOS_VERSION }}-amd64.iso" -extract / iso-work/ 2>&1 | tail -3
+          echo "[OK] ISO structure extracted"
+          
+          # Replace initramfs
+          echo "[*] Replacing initramfs with branded version..."
+          cp "initramfs-branded.$EXT" "iso-work/boot/initramfs-branded.$EXT"
+          
+          # Rebuild ISO
+          echo "[*] Rebuilding ISO with branding..."
+          ISO_NAME="itl-talos-${{ env.TALOS_VERSION }}.iso"
+          xorriso -as mkisofs \
+            -iso-level 3 \
+            -volid "ITL-TALOS-v1_9_0" \
+            -eltorito-boot boot.catalog \
+            -no-emul-boot \
+            -eltorito-alt-boot \
+            -e efi.img \
+            -no-emul-boot \
+            -isohybrid-gpt-basdat \
+            -output "$ISO_NAME" \
+            iso-work/ 2>&1 | tail -10
+          
+          if [ ! -f "$ISO_NAME" ]; then
+            echo "[ERROR] ISO build failed!"
+            exit 1
           fi
           
           echo "[OK] ISO build complete"
-
-      - name: Copy and rename ISO
-        run: |
-          mkdir -p iso-output
-          cp talos-src/_out/talos-amd64.iso iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
-          ls -lh iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
+          ls -lh "$ISO_NAME"
 
       - name: Generate ISO checksums
         run: |
-          cd iso-output
+          cd build-output
+          
+          ISO_NAME="itl-talos-${{ env.TALOS_VERSION }}.iso"
           
           echo "[*] Generating checksums..."
-          sha256sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
-          sha256sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+          sha256sum "$ISO_NAME" > "$ISO_NAME.sha256"
+          sha256sum -c "$ISO_NAME.sha256"
           
-          md5sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.md5
-          md5sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.md5
+          md5sum "$ISO_NAME" > "$ISO_NAME.md5"
+          md5sum -c "$ISO_NAME.md5"
           
           echo "[OK] Checksums generated"
           
@@ -395,7 +427,7 @@ jobs:
           
           Contents:
           - Custom ITL branded Talos installer
-          - Security hardening extensions
+          - Security hardening configuration
           - Bootable ISO for metal hardware deployment
           
           Installation:
@@ -410,7 +442,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bootable-iso
-          path: iso-output/
+          path: build-output/
           retention-days: 30
       
       - name: Create GitHub Release
@@ -418,9 +450,9 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso
-            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
-            iso-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
+            build-output/itl-talos-${{ env.TALOS_VERSION }}.iso
+            build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+            build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
             iso-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
           body: |
             # ITL Talos HardenedOS ${{ github.ref_name }}
