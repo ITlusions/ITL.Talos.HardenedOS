@@ -1,0 +1,19 @@
+ITL Talos HardenedOS - Build Information
+
+Version: v1.9.0
+Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
+Commit: 2bb52a122013ece8248cb92f3d2a7796afe3d077
+Repository: ITlusions/ITL.Talos.HardenedOS
+Workflow: https://github.com/ITlusions/ITL.Talos.HardenedOS/actions/runs/21571935271
+
+Contents:
+- Custom ITL branded Talos installer
+- Security hardening extensions
+- Bootable ISO for metal hardware deployment
+
+Installation:
+1. Boot from ISO on target hardware
+2. Configure network during installation
+3. Apply Talos configuration using talosctl
+
+Documentation: https://www.talos.dev/
