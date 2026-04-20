@@ -188,6 +188,7 @@ kubectl get nodes -o wide
 ## See Also
 
 - Visual overview: [02-VISUAL_OVERVIEW.md](02-VISUAL_OVERVIEW.md)
-- Setup guide: [03-SIMPLIFIED_SETUP.md](03-SIMPLIFIED_SETUP.md)
-- Deployment: [05-QUICKSTART.md](05-QUICKSTART.md)
-- Full reference: [04-BUILD_PIPELINE.md](04-BUILD_PIPELINE.md)
+- Build pipeline: [03-BUILD-PIPELINE.md](03-BUILD-PIPELINE.md)
+- Deployment: [04-DEPLOYMENT.md](04-DEPLOYMENT.md)
+- Container usage: [05-CONTAINER-USAGE.md](05-CONTAINER-USAGE.md)
+- **Bare metal cluster walkthrough (1 CP + 2 workers)**: [08-BAREMETAL-CLUSTER-WALKTHROUGH.md](08-BAREMETAL-CLUSTER-WALKTHROUGH.md)

@@ -1,0 +1,440 @@
+# Project Structure Reference
+
+Complete file listing and component organization.
+
+## Directory Tree
+
+```
+ITL.Talos.HardenedOS/
+├── README.md                    Main project overview
+├── LICENSE                      MIT License
+├── .github/
+│   └── workflows/
+│       └── build-talos-hardened.yaml    GitHub Actions pipeline
+├── docs/                        Documentation
+│   ├── 01-QUICK_REFERENCE.md
+│   ├── 02-VISUAL_OVERVIEW.md
+│   ├── 03-BUILD-PIPELINE.md
+│   ├── 04-DEPLOYMENT.md
+│   ├── 05-CONTAINER-USAGE.md
+│   ├── 06-PROJECT-STRUCTURE.md
+│   └── 07-ROADMAP.md
+├── build/                       Build scripts and Dockerfiles
+│   ├── Dockerfile.installer     Custom Talos installer
+│   ├── Dockerfile.branding      Branding extension
+│   ├── Dockerfile.security      Security extension
+│   └── scripts/
+│       ├── branding-init.sh     Initialize branding
+│       └── installer-entrypoint.sh  Installer entry point
+├── config/                      Configuration files
+│   ├── patches/
+│   │   ├── branding-patch.yaml      Console branding
+│   │   └── security-hardening.yaml  Security config
+│   └── output/                  Generated configs (after build)
+│       ├── controlplane-final.yaml
+│       └── worker-final.yaml
+├── extensions/                  Talos extensions
+│   ├── itl-branding/
+│   │   ├── Dockerfile
+│   │   └── scripts/
+│   │       ├── banner.txt
+│   │       └── init.sh
+│   └── itl-security/
+│       ├── Dockerfile
+│       ├── kernel-params.txt
+│       └── security-config.yaml
+├── branding/                    Branding assets
+│   ├── templates/
+│   │   └── console-banner.txt
+│   └── logos/
+│       └── itl-logo.txt
+├── provisioner/                 Zero-Touch Provisioning tooling
+│   ├── docker-compose.yml       Registration Service + Caddy TLS stack
+│   ├── .env.example             Environment variables template
+│   └── usb-agent/
+│       ├── build-usb.sh         Build online USB agent
+│       ├── build-usb-offline.sh Build airgapped USB agent
+│       ├── tpm-register.sh      Main USB agent script
+│       ├── tpm-common.sh        TPM EK reading helpers
+│       └── tpm-attest.sh        Post-install TPM attestation
+└── services/
+    └── machine-registration/    Registration Service (FastAPI + SQLite)
+        ├── pyproject.toml
+        └── src/registration/
+            ├── main.py          FastAPI app + API endpoints
+            └── models.py        Machine model, NodeRole, MachineStatus enums
+```
+
+## File Descriptions
+
+### Root Level Files
+
+| File | Purpose | Size |
+|------|---------|------|
+| README.md | Project overview, features, quick start | 8KB |
+| LICENSE | MIT license text | 1KB |
+| .gitignore | Git ignore rules | 100B |
+| .github/workflows/build-talos-hardened.yaml | GitHub Actions CI/CD | 2KB |
+
+### Documentation Directory: /docs
+
+| File | Purpose | Content |
+|------|---------|---------|
+| 01-QUICK_REFERENCE.md | One-page command cheat sheet | Commands, timeline, ZTP quick reference, troubleshooting |
+| 02-VISUAL_OVERVIEW.md | ASCII diagrams and flowcharts | Pipeline flows, ZTP architecture, decision trees |
+| 03-BUILD-PIPELINE.md | CI/CD pipeline reference | Workflow config, job YAML, caching, debugging |
+| 04-DEPLOYMENT.md | Deployment guide (quick start → production) | Quick start, ZTP, HA, cloud, post-deploy |
+| 05-CONTAINER-USAGE.md | Docker/Kubernetes usage | Development, deployment patterns, container images |
+| 06-PROJECT-STRUCTURE.md | This file | Complete file reference |
+| 07-ROADMAP.md | Development roadmap | Milestones, planned features, version history |
+
+Total Documentation: 7 files
+
+### Build Directory: /build
+
+Contains Docker build artifacts and scripts.
+
+#### Dockerfiles
+
+**Dockerfile.installer** (200 lines)
+- Base: siderolabs/talos:v1.9.0
+- Installs custom extensions
+- Includes talosctl and kubectl
+- Output: ghcr.io/itlusions/itl-talos-hardened-os-installer
+
+**Dockerfile.branding** (100 lines)
+- Base: alpine:latest
+- Creates console branding
+- Generates ASCII art
+- Output: ghcr.io/itlusions/itl-talos-hardened-os-branding
+
+**Dockerfile.security** (120 lines)
+- Base: alpine:latest
+- Kernel hardening modules
+- TPM 2.0 support
+- LUKS2 encryption utilities
+- Output: ghcr.io/itlusions/itl-talos-hardened-os-security
+
+#### Scripts
+
+**scripts/branding-init.sh** (50 lines)
+- Generates figlet banners
+- Creates kernel-compatible logos
+- Sets console messages
+- Called during extension build
+
+**scripts/installer-entrypoint.sh** (30 lines)
+- Docker entry point for installer
+- Validates Talos version
+- Starts talosctl server
+- Handles graceful shutdown
+
+### Configuration Directory: /config
+
+#### Patches Subdirectory: /config/patches
+
+**branding-patch.yaml** (30 lines)
+
+Applies custom branding to both controlplane and worker nodes:
+- Hostname configuration
+- Console messages
+- System logging settings
+
+**security-hardening.yaml** (50 lines)
+
+Enables security features:
+- Kernel modules (KVM, audit)
+- RBAC enforcement
+- Kernel hardening sysctls
+- Feature flags
+
+Example settings:
+- fs.suid_dumpable: 0
+- kernel.kptr_restrict: 2
+- rbac: true
+
+#### Output Subdirectory: /config/output
+
+Generated during workflow run:
+
+**controlplane-final.yaml** (~100 lines)
+- Base Talos configuration for control plane
+- Branding patch applied
+- Security hardening applied
+- Ready to deploy
+- Generated by talosctl
+
+**worker-final.yaml** (~80 lines)
+- Base Talos configuration for worker nodes
+- Security hardening applied
+- Lighter than control plane
+- Ready to deploy
+
+### Extensions Directory: /extensions
+
+Custom Talos extensions build from here.
+
+#### itl-branding Extension
+
+**extensions/itl-branding/Dockerfile**
+- Creates console branding extension
+- Size: 50MB
+- Includes ASCII art assets
+- Tagged as: itl-talos-hardened-os-branding
+
+**extensions/itl-branding/scripts/banner.txt**
+- ASCII art logo
+- Displayed on login
+- Contains ITL branding
+
+**extensions/itl-branding/scripts/init.sh**
+- Runs during boot
+- Sets console messages
+- Configures banner display
+
+#### itl-security Extension
+
+**extensions/itl-security/Dockerfile**
+- Creates security extension
+- Size: 100MB
+- Includes security tools
+- Tagged as: itl-talos-hardened-os-security
+
+**extensions/itl-security/kernel-params.txt**
+- Kernel hardening parameters
+- Applied at boot
+- Restrict dangerous features
+
+**extensions/itl-security/security-config.yaml**
+- TPM 2.0 configuration
+- LUKS2 encryption defaults
+- Audit logging setup
+
+### Branding Directory: /branding
+
+Non-code branding assets.
+
+**branding/templates/console-banner.txt**
+- Console login banner
+- ASCII art format
+- 80 character width
+- Customizable text
+
+**branding/logos/itl-logo.txt**
+- Company logo
+- ASCII art
+- Used in documentation
+- 40x20 characters
+
+## Code Statistics
+
+### By Type
+
+| Type | Files | Lines | Size |
+|------|-------|-------|------|
+| YAML (config) | 3 | 200 | 5KB |
+| Dockerfile | 3 | 400 | 12KB |
+| Shell Scripts | 3 | 150 | 4KB |
+| Markdown Docs | 10 | 2000 | 90KB |
+| Text Assets | 4 | 50 | 2KB |
+| Total | 23 | 2800 | 113KB |
+
+### By Directory
+
+| Directory | Files | Purpose |
+|-----------|-------|---------|
+| /docs | 9 | Documentation |
+| /build | 6 | Build system |
+| /config | 5 | Configuration |
+| /extensions | 6 | Talos extensions |
+| /branding | 4 | Assets |
+| root | 3 | Project metadata |
+
+## File Relationships
+
+### Build Flow
+
+```
+Dockerfile.branding (extension)
+    down arrow
+build-branding job
+    down arrow
+image
+    down arrow
+Dockerfile.installer (uses branding image)
+    down arrow
+build-installer job
+    down arrow
+image
+    down arrow
+generate-configs job
+    down arrow
+config/*.yaml patches
+    down arrow
+controlplane-final.yaml, worker-final.yaml
+```
+
+### Configuration Flow
+
+```
+branding-patch.yaml
+    down arrow
+config/output/controlplane-final.yaml
+    down arrow
+Kubernetes cluster
+    down arrow
+controlplane nodes
+    down arrow
+Console shows custom banner
+```
+
+### Security Flow
+
+```
+security-hardening.yaml
+    down arrow
+config/output/controlplane-final.yaml
+    down arrow
+Kubernetes cluster
+    down arrow
+All nodes
+    down arrow
+Kernel hardening applied
+```
+
+## Dependency Graph
+
+README.md (entry point)
+- docs/01-QUICK_REFERENCE.md (quick start)
+  - docs/03-SIMPLIFIED_SETUP.md (setup details)
+    - docs/04-BUILD_PIPELINE.md (pipeline explanation)
+      - docs/05-QUICKSTART.md (deployment steps)
+        - docs/06-DEPLOYMENT.md (production setup)
+          - docs/07-CONTAINER_USAGE.md (container reference)
+
+.github/workflows/build-talos-hardened.yaml
+- build/Dockerfile.*
+  - extensions/*/Dockerfile
+    - config/patches/*.yaml
+      - build/scripts/*
+
+## Key Files by Purpose
+
+### For Getting Started
+- README.md - Overview
+- docs/01-QUICK_REFERENCE.md - Commands
+- docs/05-QUICKSTART.md - Deployment
+
+### For Understanding
+- docs/02-VISUAL_OVERVIEW.md - Diagrams
+- docs/03-SIMPLIFIED_SETUP.md - Details
+- docs/04-BUILD_PIPELINE.md - Pipeline
+
+### For Operations
+- docs/06-DEPLOYMENT.md - Production
+- docs/07-CONTAINER_USAGE.md - Containers
+- config/patches/*.yaml - Customization
+
+### For Development
+- .github/workflows/build-talos-hardened.yaml - CI/CD
+- build/Dockerfile.* - Images
+- extensions/*/Dockerfile - Extensions
+
+### For Reference
+- docs/08-CICD_PIPELINE.md - Architecture
+- docs/09-PROJECT_STRUCTURE.md - This file
+
+## Version Tracking
+
+**Main Version**: In README.md
+```
+Version: 1.0.0
+Talos: v1.9.0
+Kubernetes: 1.29.0
+```
+
+**Release Tags**: Created as v*.* format
+- v1.0.0 - Initial release
+- v1.1.0 - Minor update
+- v2.0.0 - Major update
+
+**Workflow Version**: In .github/workflows/build-talos-hardened.yaml
+```
+TALOS_VERSION: v1.9.0
+KUBE_VERSION: 1.29.0
+```
+
+## Customization Checklist
+
+To customize this project:
+
+- [ ] Edit README.md with your organization
+- [ ] Update branding/logos/ with your logos
+- [ ] Modify config/patches/branding-patch.yaml
+- [ ] Customize config/patches/security-hardening.yaml
+- [ ] Update extensions/itl-branding/ with your branding
+- [ ] Modify TALOS_VERSION in workflow if needed
+- [ ] Update documentation in docs/
+- [ ] Review and customize Dockerfiles in build/
+- [ ] Test locally before releasing
+
+## Common File Locations
+
+**To change Talos version**:
+- .github/workflows/build-talos-hardened.yaml (line: TALOS_VERSION)
+
+**To change branding**:
+- config/patches/branding-patch.yaml
+- branding/templates/console-banner.txt
+- extensions/itl-branding/scripts/banner.txt
+
+**To add security features**:
+- config/patches/security-hardening.yaml
+- extensions/itl-security/security-config.yaml
+
+**To modify build process**:
+- .github/workflows/build-talos-hardened.yaml
+- build/Dockerfile.installer
+- build/scripts/*
+
+**To add documentation**:
+- docs/10-*.md (use numbered sequence)
+- Update README.md with link
+
+## Storage and Cleanup
+
+### Artifacts Stored
+
+- ISO images: 90 days
+- Configuration files: 30 days
+- Build cache: unlimited
+
+### Cleanup Strategy
+
+- GitHub Actions artifacts auto-delete
+- Release assets remain until manual deletion
+- No manual cleanup needed
+
+## Performance Considerations
+
+### Build Time
+- Average build: 40 minutes
+- Critical path: generate-configs → build-iso
+- Parallel jobs: 3 (branding, extensions, installer)
+
+### File Sizes
+- ISO image: ~500MB
+- Docker images: 200-300MB each
+- Documentation: 90KB total
+
+### Disk Space
+- Build artifacts: ~2GB temporary
+- Release assets: ~500MB per release
+
+---
+
+**Version**: 1.0.0
+**Last Updated**: 2024
+**Total Files**: 23
+**Total Size**: 113KB (without ISO/images)
+

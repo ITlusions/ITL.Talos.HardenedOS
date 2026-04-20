@@ -6,8 +6,8 @@ Enterprise-grade Talos Linux with ITLusions branding and security hardening. Cus
 [![Build Status](https://img.shields.io/github/actions/workflow/status/ITlusions/ITL.Talos.HardenedOS/build-talos-hardened.yaml?style=for-the-badge&label=Build)](https://github.com/ITlusions/ITL.Talos.HardenedOS/actions)
 [![Talos Version](https://img.shields.io/badge/Talos-v1.9.0-blue?style=for-the-badge)](https://www.talos.dev/)
 [![License MIT](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Security Hardened](https://img.shields.io/badge/Security-Hardened-red?style=for-the-badge)](docs/06-DEPLOYMENT.md)
-[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge)](docs/07-CONTAINER_USAGE.md)
+[![Security Hardened](https://img.shields.io/badge/Security-Hardened-red?style=for-the-badge)](docs/04-DEPLOYMENT.md)
+[![Docker Ready](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge)](docs/05-CONTAINER-USAGE.md)
 
 ## Quick Start
 
@@ -60,20 +60,17 @@ talosctl apply-config --nodes <ip> --file controlplane-final.yaml
 Start here based on your needs:
 
 ### Getting Started
-- **[01-QUICK_REFERENCE.md](docs/01-QUICK_REFERENCE.md)** (1 min) - Commands only
-- **[02-VISUAL_OVERVIEW.md](docs/02-VISUAL_OVERVIEW.md)** (2 min) - Diagrams and flowcharts
-- **[03-SIMPLIFIED_SETUP.md](docs/03-SIMPLIFIED_SETUP.md)** (5 min) - Step-by-step walkthrough
+- **[01-QUICK_REFERENCE.md](docs/01-QUICK_REFERENCE.md)** — Commands, ZTP cheat sheet, pipeline timeline
+- **[02-VISUAL_OVERVIEW.md](docs/02-VISUAL_OVERVIEW.md)** — Diagrams and flowcharts
 
-### Detailed Documentation
-- **[04-BUILD_PIPELINE.md](docs/04-BUILD_PIPELINE.md)** - How the pipeline works
-- **[05-QUICKSTART.md](docs/05-QUICKSTART.md)** - 5-minute deployment guide
-- **[06-DEPLOYMENT.md](docs/06-DEPLOYMENT.md)** - Detailed deployment instructions
-- **[07-CONTAINER_USAGE.md](docs/07-CONTAINER_USAGE.md)** - Running containers on the OS
+### Build & Deploy
+- **[03-BUILD-PIPELINE.md](docs/03-BUILD-PIPELINE.md)** — CI/CD pipeline: workflow config, job YAML, caching, debugging
+- **[04-DEPLOYMENT.md](docs/04-DEPLOYMENT.md)** — Deployment guide: quick start → ZTP → HA production → cloud
 
 ### Reference
-- **[08-CICD_PIPELINE.md](docs/08-CICD_PIPELINE.md)** - Complete pipeline architecture
-- **[09-PROJECT_STRUCTURE.md](docs/09-PROJECT_STRUCTURE.md)** - File reference and listing
-- **[10-ROADMAP.md](docs/10-ROADMAP.md)** - Development roadmap and planned features
+- **[05-CONTAINER-USAGE.md](docs/05-CONTAINER-USAGE.md)** — Docker/Kubernetes usage and development patterns
+- **[06-PROJECT-STRUCTURE.md](docs/06-PROJECT-STRUCTURE.md)** — File reference and project layout
+- **[07-ROADMAP.md](docs/07-ROADMAP.md)** — Development roadmap and planned features
 
 ## What You Get
 
