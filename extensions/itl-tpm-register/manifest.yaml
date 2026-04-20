@@ -1,0 +1,14 @@
+version: v1alpha1
+metadata:
+  name: itl-tpm-register
+  version: 1.0.0
+  author: ITlusions
+  description: >
+    ITL TPM Registration Extension — adds tpm2-tools to the Talos rootfs and
+    a post-install attestation service.  On first boot after Talos installation
+    the service reads the TPM EK certificate, sends it to the ITL Registration
+    Service for hardware-bound identity verification, and marks the machine as
+    attested.  Subsequent reboots are no-ops (attestation is idempotent).
+  compatibility:
+    talos:
+      version: ">= v1.7.0"

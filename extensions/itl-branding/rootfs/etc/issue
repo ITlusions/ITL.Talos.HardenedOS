@@ -1,0 +1,23 @@
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║  ██╗████████╗██╗         ████████╗ █████╗ ██╗      ██████╗ ███████╗  ║
+║  ██║╚══██╔══╝██║         ╚══██╔══╝██╔══██╗██║     ██╔═══██╗██╔════╝  ║
+║  ██║   ██║   ██║            ██║   ███████║██║     ██║   ██║███████╗  ║
+║  ██║   ██║   ██║            ██║   ██╔══██║██║     ██║   ██║╚════██║  ║
+║  ██║   ██║   ███████╗       ██║   ██║  ██║███████╗╚██████╔╝███████║  ║
+║  ╚═╝   ╚═╝   ╚══════╝       ╚═╝   ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝  ║
+║                                                                       ║
+║              H A R D E N E D   O S   F O R   K U B E R N E T E S     ║
+║                                                                       ║
+║  Platform  : Talos Linux (immutable, API-driven)                     ║
+║  Vendor    : ITlusions — Enterprise Kubernetes Infrastructure        ║
+║  Security  : LUKS2 · TPM 2.0 · Keycloak OIDC · gVisor               ║
+║                                                                       ║
+║  Hostname  : \n                                                       ║
+║  Address   : \4                                                       ║
+║  Kernel    : \r                                                       ║
+║                                                                       ║
+║  Docs      : https://docs.itlusions.com/talos                        ║
+║  Issues    : https://github.com/ITlusions/ITL.Talos.HardenedOS       ║
+╚═══════════════════════════════════════════════════════════════════════╝
+

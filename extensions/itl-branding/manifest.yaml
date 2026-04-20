@@ -1,0 +1,6 @@
+version: v1alpha1
+metadata:
+  name: itl-branding
+  version: 1.0.0
+  author: ITlusions
+  description: Custom ITLusions branding for Talos Linux — console banners, MOTD, and release info

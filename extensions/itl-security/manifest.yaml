@@ -1,0 +1,6 @@
+version: v1alpha1
+metadata:
+  name: itl-security
+  version: 1.0.0
+  author: ITlusions
+  description: Security hardening for Talos Linux — sysctl parameters, audit rules, and kernel module policy

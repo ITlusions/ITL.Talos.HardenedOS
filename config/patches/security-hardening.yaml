@@ -1,103 +1,67 @@
 # Talos Configuration Patch: Security Hardening
 # Applies security hardening, TPM 2.0, LUKS2, audit logging, and other security controls
+# Compatible with Talos v1.9 MachineConfig API
 
 machine:
-  # Security API configuration
-  security:
-    kernel:
-      modules:
-        - name: tpm
-        - name: tpm_crb
-        - name: tpm_tis
-        - name: integrity
-        - name: audit
-    
-    capabilities:
-      kernel:
-        - CAP_CHOWN
-        - CAP_DAC_OVERRIDE
-        - CAP_FOWNER
-        - CAP_SETGID
-        - CAP_SETUID
-        - CAP_SETFCAP
-        - CAP_SETPCAP
-        - CAP_NET_RAW
-        - CAP_SYS_CHROOT
-        - CAP_KILL
-        - CAP_AUDIT_WRITE
-      
-      allowPrivilegeEscalation: false
+  # ── Kernel modules for TPM and integrity measurement ───────────────
+  kernel:
+    modules:
+      - name: tpm
+      - name: tpm_crb
+      - name: tpm_tis
+      - name: integrity
+      - name: dm_crypt
 
-  # Kubelet configuration with security focus
+  # ── Kubelet hardening (CIS Kubernetes Benchmark) ───────────────────
   kubelet:
-    # Read-only root filesystem
     extraArgs:
       read-only-port: "0"
       protect-kernel-defaults: "true"
       event-record-qps: "5"
       feature-gates: "RotateKubeletServerCertificate=true"
-    
-    # Pod security policy enforcement
     extraConfig:
       eventRecordQPS: 5
       protectKernelDefaults: true
       rotateCertificates: true
       serverTLSBootstrap: true
 
-  # System disk encryption with LUKS2 and TPM
-  disks:
-    - device: /dev/sda
-      partitions:
-        - size: 1048576
-          mountpoint: /boot
-        - size: 0
-          mountpoint: /
-          encrypt:
-            # Use LUKS2 for encryption
-            type: luks2
-            # TPM 2.0 sealing for automatic unlock
-            key_file:
-              source: tpm
-              # Recovery password required for manual unlock
-              requirements:
-                - tpm
-            # Cipher configuration
-            cipher: aes-xts-plain64
-            key_size: 512
-            pbkdf:
-              type: argon2id
-              iterations: 4
-              parallelism: 4
-              memory_mib: 512
-            # Sector size for better performance
-            sector_size: 4096
+  # ── System disk encryption: STATE and EPHEMERAL partitions ─────────
+  # Uses LUKS2 with TPM2 PCR sealing for automatic unlock
+  systemDiskEncryption:
+    state:
+      provider: luks2
+      keys:
+        - nodeID: {}
+          slot: 0
+        - tpm: {}
+          slot: 1
+    ephemeral:
+      provider: luks2
+      keys:
+        - nodeID: {}
+          slot: 0
+        - tpm: {}
+          slot: 1
 
-  # Network security hardening
-  network:
-    interfaces:
-      - interface: eth0
-        # DHCP with strict requirements
-        dhcp: true
-        dhcp:
-          routeMetric: 1024
-
-  # Enable audit logging
+  # ── Kernel sysctls (supplement the itl-security extension) ─────────
   sysctls:
-    # Kernel hardening parameters
     kernel.kptr_restrict: "2"
     kernel.dmesg_restrict: "1"
     kernel.printk: "3 3 3 3"
     kernel.unprivileged_bpf_disabled: "1"
-    kernel.unprivileged_userns_clone: "0"
     kernel.yama.ptrace_scope: "2"
-    
-    # Network hardening
+    fs.protected_hardlinks: "1"
+    fs.protected_symlinks: "1"
     net.ipv4.conf.all.rp_filter: "1"
     net.ipv4.conf.default.rp_filter: "1"
     net.ipv4.icmp_echo_ignore_broadcasts: "1"
     net.ipv4.icmp_ignore_bogus_error_responses: "1"
     net.ipv4.tcp_syncookies: "1"
+    net.ipv4.tcp_rfc1337: "1"
     net.ipv4.conf.all.log_martians: "1"
+    net.ipv4.conf.all.accept_redirects: "0"
+    net.ipv4.conf.all.send_redirects: "0"
+    net.ipv6.conf.all.accept_ra: "0"
     net.ipv4.conf.default.log_martians: "1"
     net.ipv6.conf.all.disable_ipv6: "1"
     net.ipv6.conf.default.disable_ipv6: "1"

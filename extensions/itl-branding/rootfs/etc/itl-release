@@ -1,0 +1,8 @@
+NAME="ITL Talos HardenedOS"
+VERSION="1.0.0"
+ID=talos
+ID_LIKE=linux
+PRETTY_NAME="ITL Talos HardenedOS 1.0.0"
+VENDOR="ITlusions"
+HOME_URL="https://docs.itlusions.com/talos"
+SUPPORT_URL="https://github.com/ITlusions/ITL.Talos.HardenedOS/issues"

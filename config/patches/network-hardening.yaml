@@ -1,0 +1,39 @@
+# Talos Configuration Patch: Network Hardening
+# Applies strict network configuration for control-plane and worker nodes
+
+machine:
+  network:
+    # ── Disable IPv6 router advertisements ───────────────────────────
+    # (already covered by sysctls, but belt-and-suspenders)
+    nameservers:
+      - 1.1.1.1
+      - 8.8.8.8
+
+  # ── Time synchronisation — required for TLS cert validity ──────────
+  time:
+    disabled: false
+    servers:
+      - time.cloudflare.com
+      - pool.ntp.org
+
+cluster:
+  # ── Kubernetes Network Policy (enforced by CNI) ───────────────────
+  # These apply at the cluster level after bootstrap; use a separate
+  # NetworkPolicy manifest for workload namespaces.
+
+  # ── kube-proxy mode: iptables (default, most compatible) ─────────
+  proxy:
+    disabled: false
+    mode: iptables
+    extraArgs:
+      metrics-bind-address: "127.0.0.1:10249"
+
+  # ── CoreDNS hardening ─────────────────────────────────────────────
+  coreDNS:
+    disabled: false
+
+  # ── etcd: restrict peer and client access ─────────────────────────
+  etcd:
+    extraArgs:
+      listen-metrics-urls: "http://127.0.0.1:2381"
+      auto-compaction-retention: "8"

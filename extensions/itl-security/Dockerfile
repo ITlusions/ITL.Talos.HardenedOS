@@ -1,18 +1,23 @@
 # Dockerfile for ITL Security Extension
-# This extension adds security hardening to Talos Linux
+# Talos system extensions use OCI images with /manifest.yaml + /rootfs overlay
 
-FROM ghcr.io/siderolabs/bldr:latest as builder
+FROM alpine:3.19 AS rootfs-builder
 
-WORKDIR /src
-COPY . .
+RUN mkdir -p \
+    /rootfs/etc/sysctl.d \
+    /rootfs/etc/audit/rules.d \
+    /rootfs/etc/modprobe.d
 
-RUN bldr build --root /src
+COPY rootfs/etc/sysctl.d/99-itl-hardening.conf  /rootfs/etc/sysctl.d/99-itl-hardening.conf
+COPY rootfs/etc/audit/rules.d/99-itl.rules       /rootfs/etc/audit/rules.d/99-itl.rules
+COPY rootfs/etc/modprobe.d/itl-security.conf     /rootfs/etc/modprobe.d/itl-security.conf
 
 FROM scratch
 
-COPY --from=builder /src/_out /
+COPY --from=rootfs-builder /rootfs /rootfs
+COPY manifest.yaml /manifest.yaml
 
-# Metadata
 LABEL org.opencontainers.image.title="ITL.Talos.HardenedOS Security Extension"
-LABEL org.opencontainers.image.description="Talos extension with security hardening, audit logging, and compliance controls"
+LABEL org.opencontainers.image.description="Talos extension: sysctl hardening, audit rules, kernel module policy"
 LABEL org.opencontainers.image.vendor="ITlusions"
+LABEL org.opencontainers.image.licenses="MIT"

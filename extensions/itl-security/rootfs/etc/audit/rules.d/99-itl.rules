@@ -1,0 +1,48 @@
+# ITL Talos HardenedOS — Linux Audit Rules
+# CIS Kubernetes Benchmark v1.9 + NIST SP 800-53
+
+# Remove existing rules
+-D
+
+# Buffer size — increase for busy nodes
+-b 8192
+
+# Failure mode: 1=log, 2=panic
+-f 1
+
+# ── Identity changes ─────────────────────────────────────────────────
+-w /etc/passwd  -p wa -k identity
+-w /etc/shadow  -p wa -k identity
+-w /etc/group   -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+
+# ── Login / logout ───────────────────────────────────────────────────
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock -p wa -k logins
+
+# ── Privileged commands ──────────────────────────────────────────────
+-a always,exit -F path=/usr/bin/sudo    -F perm=x -F auid>=500 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/su      -F perm=x -F auid>=500 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/chsh    -F perm=x -F auid>=500 -F auid!=4294967295 -k privileged
+-a always,exit -F path=/usr/bin/newgrp  -F perm=x -F auid>=500 -F auid!=4294967295 -k privileged
+
+# ── Kernel module load / unload ──────────────────────────────────────
+-w /sbin/insmod  -p x -k modules
+-w /sbin/rmmod   -p x -k modules
+-w /sbin/modprobe -p x -k modules
+-a always,exit -F arch=b64 -S init_module,finit_module,delete_module -k modules
+
+# ── System call monitoring ───────────────────────────────────────────
+-a always,exit -F arch=b64 -S adjtimex,settimeofday -k time-change
+-a always,exit -F arch=b64 -S clock_settime -k time-change
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
+
+# ── Container / namespace operations ────────────────────────────────
+-a always,exit -F arch=b64 -S unshare -k container
+-a always,exit -F arch=b64 -S clone -F a0&0x10000000 -k container
+
+# ── File deletion by non-root ────────────────────────────────────────
+-a always,exit -F arch=b64 -S unlink,unlinkat,rename,renameat -F auid>=500 -F auid!=4294967295 -k delete
+
+# ── Immutable — lock audit config (comment out to allow changes) ─────
+# -e 2

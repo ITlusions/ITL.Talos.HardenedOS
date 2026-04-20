@@ -1,0 +1,30 @@
+# Talos Configuration Patch: Keycloak OIDC Integration
+# Configures kube-apiserver OIDC for authentication via Keycloak
+#
+# Prerequisites:
+#   1. Keycloak realm "itl" exists at https://auth.itlusions.com
+#   2. Client "talos-cluster" is created in that realm
+#   3. Client has "groups" and "preferred_username" claims mapped
+#   4. A ClusterRoleBinding maps the OIDC group to cluster-admin (optional)
+
+cluster:
+  apiServer:
+    extraArgs:
+      # ── OIDC provider ──────────────────────────────────────────────
+      oidc-issuer-url: "https://auth.itlusions.com/realms/itl"
+      oidc-client-id: "talos-cluster"
+
+      # ── Claim mappings ─────────────────────────────────────────────
+      oidc-username-claim: "preferred_username"
+      oidc-username-prefix: "oidc:"
+      oidc-groups-claim: "groups"
+      oidc-groups-prefix: "oidc:"
+
+      # ── Admission & audit ──────────────────────────────────────────
+      audit-log-path: "/var/log/kubernetes/audit.log"
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+
+      # ── Encryption at rest ─────────────────────────────────────────
+      encryption-provider-config: "/etc/kubernetes/encryption-config.yaml"
