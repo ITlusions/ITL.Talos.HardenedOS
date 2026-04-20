@@ -61,15 +61,100 @@ GitHub Release v1.0.0
 
 ## Deployment Paths
 
-Download ISO                  Download YAML Configs
-    ↓                               ↓
-Write to USB         talosctl apply-config
-    ↓
-Boot Machine
-    ↓
-Follow Talos Prompts
-    ↓
-    Deployed
+Download ISO                  Download YAML Configs         Zero-Touch Provisioning
+    ↓                               ↓                               ↓
+Write to USB         talosctl apply-config              Boot USB Agent on node
+    ↓                                                          ↓
+Boot Machine                                        TPM EK → Registration Service
+    ↓                                                          ↓
+Follow Talos Prompts                               Download role-specific ISO
+    ↓                                                          ↓
+    Deployed                                       dd to disk → reboot
+                                                               ↓
+                                                   Talos fetches MachineConfig
+                                                               ↓
+                                                   TPM attestation → Deployed
+
+## Zero-Touch Provisioning (ZTP) Flow
+
+```
+Admin (one-time setup)
+  ├─ docker compose up -d           Start Registration Service
+  ├─ POST /api/v1/machines/import   Pre-register nodes by EK fingerprint
+  └─ build-usb.sh /dev/sdX          Build USB agent
+
+Field Ops (per node, ~10 min)
+  └─ Insert USB, power on           No further input needed
+
+USB Agent (Alpine Linux)
+  ├─ Read TPM EK from NV 0x01c00002
+  ├─ Read hw_uuid / hw_mac / hw_serial
+  ├─ POST /api/v1/register
+  │     EK known?  YES → role + iso_url + config_token
+  │                NO  → pending_approval (admin approves)
+  ├─ Download iso: itl-talos-{role}-amd64.iso
+  ├─ dd ISO → /dev/sda
+  ├─ Write receipt → EFI partition
+  └─ Reboot
+
+Talos First Boot
+  ├─ kernel cmdline: talos.config=https://reg.itlusions.com/api/v1/config/{token}
+  ├─ Fetch machine-specific MachineConfig (token invalidated after fetch)
+  ├─ Apply: LUKS2+TPM, OIDC, network, security patches
+  └─ Reboot into hardened state
+
+itl-tpm-register Extension (first boot, idempotent)
+  ├─ Read TPM EK + generate PCR quote (PCRs 0-7)
+  ├─ POST /api/v1/attest
+  ├─ Service verifies EK matches pre-registered record
+  └─ status → attested  (flag written, never runs again)
+```
+
+## Role Assignment Decision Tree
+
+```
+Node boots USB agent
+        │
+        ▼
+POST /api/v1/register
+        │
+   EK pre-registered? ──YES──→ Use pre-configured role
+        │                      (controlplane | worker-infra | worker-app)
+       NO
+        │
+   desired_role set?  ──YES──→ Use hint → status=pending_approval
+        │                      Admin confirms or overrides
+       NO
+        │
+        ▼
+   status=pending_approval
+   Admin: POST /api/v1/machines/{id}/approve
+          { role, hostname, assigned_ip }
+```
+
+## Offline / Airgapped Path
+
+```
+Admin generates offline bundle
+  GET /api/v1/machines/{id}/offline-bundle
+  → build-usb-offline.sh creates USB with:
+      enrollment.crt  (issued by Enrollment CA)
+      enrollment.key
+      ISO URL
+      one-time config_token
+
+Node boots USB (no network during install)
+  └─ All data on EFI partition
+
+Talos first boot (network available)
+  └─ tpm-attest.sh sees enrollment.crt
+  └─ POST /api/v1/machines/enroll
+       { cert_pem, nonce, nonce_signature }
+  └─ Service verifies key possession → registered + attested in one step
+     No admin approval needed
+```
+
+
 
 ## Time Breakdown
 

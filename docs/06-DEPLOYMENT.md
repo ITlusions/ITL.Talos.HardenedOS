@@ -2,6 +2,165 @@
 
 Comprehensive production deployment of Talos Linux clusters.
 
+## Deployment Methods
+
+| Method | When to use |
+|--------|-------------|
+| [Zero-Touch Provisioning (ZTP)](#zero-touch-provisioning-ztp) | Production — fully automated via TPM identity |
+| [Manual deployment](#single-node-deployment) | Dev/test or single-node |
+| [HA multi-node](#multi-node-ha-deployment) | Production multi-node (manual config push) |
+| [Cloud](#cloud-deployments) | AWS / Azure / GCP |
+
+---
+
+## Zero-Touch Provisioning (ZTP)
+
+Full automated install driven by TPM hardware identity. A machine boots a lightweight Alpine USB agent, registers its TPM EK with the Registration Service, receives the correct role-specific ISO, installs it, then attestation and config delivery happen automatically on first Talos boot — zero operator input per node.
+
+### Architecture
+
+```
+USB Agent Boot (Alpine Linux)
+        │
+        │  POST /api/v1/register
+        │  { ek_fingerprint, hw_uuid, hw_mac, desired_role }
+        ▼
+Registration Service  ────────────────────────────────────────────
+        │                                                         │
+   EK known?                                                      │
+   ├─ YES → assign pre-configured role + ISO URL + config_token   │
+   └─ NO  → status=pending_approval (admin approves via UI/CLI)   │
+        │                                                         │
+        ▼                                                    SQLite DB
+   Returns: { role, iso_url, config_token }                  machines
+        │
+        │  Download role-specific ISO
+        │  itl-talos-controlplane-amd64.iso
+        │  itl-talos-worker-infra-amd64.iso
+        │  itl-talos-worker-app-amd64.iso
+        ▼
+   dd ISO → target disk
+   Write registration receipt → EFI partition
+        │
+        ▼
+   Reboot into Talos
+        │
+        │  GET /api/v1/config/{token}  (kernel cmdline: talos.config=...)
+        ▼
+   Talos fetches machine-specific MachineConfig YAML (one-time token)
+   Applies: LUKS2+TPM seal, OIDC, network, security patches
+   Reboots into hardened state
+        │
+        ▼
+   itl-tpm-register extension runs (first boot only, idempotent)
+        │  POST /api/v1/attest
+        │  { ek_fingerprint, pcr_quote (PCRs 0-7), hw_uuid }
+        ▼
+   Service verifies EK matches pre-registered record
+   Machine marked status=attested
+```
+
+### What determines the role?
+
+| Source | How |
+|--------|-----|
+| **Pre-registration by EK fingerprint** | Register TPM EK before hardware arrives → role auto-assigned at USB boot |
+| **`desired_role` hint** | Set `ITL_ROLE=controlplane` env var on USB agent — used as hint, admin can override |
+| **Admin approval** | Unknown machines land in `pending_approval` → `POST /api/v1/machines/{id}/approve` |
+| **Offline bundle** | Role baked into bundle at generation time — fully deterministic, airgap-safe |
+
+### Start the Registration Service
+
+```bash
+# 1. Configure environment
+cd provisioner
+cp .env.example .env
+# Edit .env:
+#   ITL_ADMIN_TOKEN=<strong-secret>
+#   ITL_SERVICE_URL=https://reg.itlusions.com
+#   ITL_ISO_BASE_URL=https://github.com/ITlusions/ITL.Talos.HardenedOS/releases/latest/download
+
+# 2. Start stack (Registration API + Caddy TLS proxy)
+docker compose up -d
+
+# 3. Download role configs from the matching GitHub Release
+docker compose exec registration /bin/sh -c \
+  "/app/scripts/download-configs.sh v1.9.0"
+```
+
+### Pre-register a machine (known hardware)
+
+```bash
+# Register by EK fingerprint before the machine arrives
+curl -s -X POST https://reg.itlusions.com/api/v1/machines/import \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ek_fingerprint": "<64-char-sha256-hex>",
+    "hw_serial": "SRV-001",
+    "role": "controlplane",
+    "hostname": "cp1.itlusions.internal"
+  }'
+```
+
+### Create the USB agent
+
+```bash
+# Online (downloads latest USB agent image)
+cd provisioner/usb-agent
+./build-usb.sh /dev/sdX
+
+# Airgapped / offline (embeds everything needed)
+./build-usb-offline.sh /dev/sdX --machine-id <uuid> --role controlplane
+```
+
+### Boot a node
+
+1. Insert USB, power on machine.
+2. USB agent detects target disk, reads TPM EK, calls Registration Service.
+3. Downloads + writes role-specific ISO to disk automatically.
+4. Reboots — no operator input required from this point.
+
+### Admin approval (unknown machines)
+
+```bash
+# List pending machines
+curl -s https://reg.itlusions.com/api/v1/machines \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" | jq '.[] | select(.status=="pending_approval")'
+
+# Approve and assign role
+curl -s -X POST https://reg.itlusions.com/api/v1/machines/{machine_id}/approve \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"role": "worker-app", "hostname": "w1.itlusions.internal"}'
+```
+
+### Verify attestation
+
+```bash
+# Check machine status
+curl -s https://reg.itlusions.com/api/v1/machines \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" | \
+  jq '.[] | {hostname, role, status, attested_at}'
+# status=attested means TPM PCR quote verified, node is trusted
+```
+
+### ZTP checklist
+
+| Step | Who | Command / Action |
+|------|-----|-----------------|
+| Start Registration Service | Admin | `docker compose up -d` |
+| Pre-register hardware (optional) | Admin | `POST /api/v1/machines/import` |
+| Build USB agent | Admin | `./build-usb.sh /dev/sdX` |
+| Boot machine with USB | Ops | Insert USB, power on |
+| Approve if unknown (optional) | Admin | `POST /api/v1/machines/{id}/approve` |
+| Node installs + attests | Automatic | — |
+| Bootstrap first control plane | Admin | `talosctl bootstrap` (once) |
+
+> **Port requirement** — Add `8443/tcp` (or `443/tcp` if behind Caddy) to your firewall for nodes to reach the Registration Service during install.
+
+---
+
 ## Pre-Deployment Checklist
 
 Before deploying to production, verify:

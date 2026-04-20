@@ -98,6 +98,67 @@ Visit Releases Tab, download:
 | Build doesn't start | Check tag format: v1.0.0 (not 1.0.0) |
 | Build times out | Retry - Image Factory API can be slow |
 | ISO missing | Wait longer - 15 min step can be slow |
+
+---
+
+## Zero-Touch Provisioning (ZTP)
+
+### Start Registration Service
+```bash
+cd provisioner
+cp .env.example .env   # set ITL_ADMIN_TOKEN, ITL_SERVICE_URL
+docker compose up -d
+docker compose exec registration /bin/sh -c "/app/scripts/download-configs.sh v1.9.0"
+```
+
+### Pre-register a node (before hardware arrives)
+```bash
+curl -X POST https://reg.itlusions.com/api/v1/machines/import \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"ek_fingerprint":"<64hex>","role":"controlplane","hostname":"cp1.itlusions.internal"}'
+```
+
+### Build USB provisioning agent
+```bash
+cd provisioner/usb-agent
+./build-usb.sh /dev/sdX               # online
+./build-usb-offline.sh /dev/sdX       # airgapped
+```
+
+### Check node status
+```bash
+curl -s https://reg.itlusions.com/api/v1/machines \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" | jq '.[] | {hostname,role,status}'
+```
+
+### Approve a pending node
+```bash
+curl -X POST https://reg.itlusions.com/api/v1/machines/{machine_id}/approve \
+  -H "Authorization: Bearer ${ITL_ADMIN_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"role":"worker-app","hostname":"w1.itlusions.internal"}'
+```
+
+### ZTP timeline (per node)
+
+```
+USB boot          30 sec   — TPM read + register call
+ISO download       5 min   — role-specific ISO (~500 MB)
+dd to disk         2 min   — write ISO
+Talos first boot   2 min   — fetch config, apply patches, reboot
+TPM attestation   30 sec   — PCR quote verified
+──────────────────────────
+Total             ~10 min  — zero operator input after USB insert
+```
+
+### Role → ISO mapping
+
+| Role | ISO filename |
+|------|-------------|
+| `controlplane` | `itl-talos-controlplane-amd64.iso` |
+| `worker-infra` | `itl-talos-worker-infra-amd64.iso` |
+| `worker-app`   | `itl-talos-worker-app-amd64.iso`   |
 | Config invalid | Check YAML syntax, verify Talos version |
 
 ## Verify Deployment

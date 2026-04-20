@@ -73,6 +73,7 @@ Start here based on your needs:
 ### Reference
 - **[08-CICD_PIPELINE.md](docs/08-CICD_PIPELINE.md)** - Complete pipeline architecture
 - **[09-PROJECT_STRUCTURE.md](docs/09-PROJECT_STRUCTURE.md)** - File reference and listing
+- **[10-ROADMAP.md](docs/10-ROADMAP.md)** - Development roadmap and planned features
 
 ## What You Get
 

@@ -20,7 +20,8 @@ ITL.Talos.HardenedOS/
 │   ├── 06-DEPLOYMENT.md
 │   ├── 07-CONTAINER_USAGE.md
 │   ├── 08-CICD_PIPELINE.md
-│   └── 09-PROJECT_STRUCTURE.md
+│   ├── 09-PROJECT_STRUCTURE.md
+│   └── 10-ROADMAP.md
 ├── build/                       Build scripts and Dockerfiles
 │   ├── Dockerfile.installer     Custom Talos installer
 │   ├── Dockerfile.branding      Branding extension
@@ -45,11 +46,26 @@ ITL.Talos.HardenedOS/
 │       ├── Dockerfile
 │       ├── kernel-params.txt
 │       └── security-config.yaml
-└── branding/                    Branding assets
-    ├── templates/
-    │   └── console-banner.txt
-    └── logos/
-        └── itl-logo.txt
+├── branding/                    Branding assets
+│   ├── templates/
+│   │   └── console-banner.txt
+│   └── logos/
+│       └── itl-logo.txt
+├── provisioner/                 Zero-Touch Provisioning tooling
+│   ├── docker-compose.yml       Registration Service + Caddy TLS stack
+│   ├── .env.example             Environment variables template
+│   └── usb-agent/
+│       ├── build-usb.sh         Build online USB agent
+│       ├── build-usb-offline.sh Build airgapped USB agent
+│       ├── tpm-register.sh      Main USB agent script
+│       ├── tpm-common.sh        TPM EK reading helpers
+│       └── tpm-attest.sh        Post-install TPM attestation
+└── services/
+    └── machine-registration/    Registration Service (FastAPI + SQLite)
+        ├── pyproject.toml
+        └── src/registration/
+            ├── main.py          FastAPI app + API endpoints
+            └── models.py        Machine model, NodeRole, MachineStatus enums
 ```
 
 ## File Descriptions
@@ -76,6 +92,7 @@ ITL.Talos.HardenedOS/
 | 07-CONTAINER_USAGE.md | Docker/Kubernetes usage | Development, deployment patterns |
 | 08-CICD_PIPELINE.md | CI/CD deep dive | Architecture, job details, monitoring |
 | 09-PROJECT_STRUCTURE.md | This file | Complete file reference |
+| 10-ROADMAP.md | Development roadmap | Milestones, planned features, version history |
 
 Total Documentation: 90KB
 
