@@ -1,0 +1,38 @@
+# Talos Flavor Patch: Registry Configuration for ControlPlane Stack
+#
+# Configures containerd to pull ITL images from ghcr.io/itlusions
+# and mirrors common public registries to avoid rate-limiting in CI.
+#
+# In air-gapped or on-premises deployments, replace the mirror endpoints
+# with your internal Harbor / Nexus / Artifactory URLs.
+
+machine:
+  registries:
+    # ── Registry mirrors (pull-through caches) ───────────────────────
+    mirrors:
+      docker.io:
+        endpoints:
+          - https://registry-1.docker.io
+      ghcr.io:
+        endpoints:
+          - https://ghcr.io
+      quay.io:
+        endpoints:
+          - https://quay.io
+
+    # ── TLS / auth configuration ──────────────────────────────────────
+    config:
+      ghcr.io:
+        tls:
+          insecureSkipVerify: false
+        # For private images, mount a pull secret instead of embedding
+        # credentials here.  Create a Kubernetes imagePullSecret and
+        # reference it in the Helm values overlay.
+
+      quay.io:
+        tls:
+          insecureSkipVerify: false
+
+      docker.io:
+        tls:
+          insecureSkipVerify: false

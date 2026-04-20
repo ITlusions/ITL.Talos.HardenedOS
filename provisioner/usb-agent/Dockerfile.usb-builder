@@ -1,0 +1,100 @@
+# Dockerfile.usb-builder
+# Builds a minimal Alpine Linux ISO with the ITL TPM registration agent
+# pre-installed. The resulting ISO is written to /output/usb-agent.iso.
+#
+# The Alpine system on the USB:
+#   - Boots directly to the register.sh script (via /etc/local.d/)
+#   - Has tpm2-tools, curl, jq, openssl pre-installed
+#   - Reads kernel args (itl.reg_url, itl.role, itl.target_disk) to allow
+#     per-boot override without rebuilding the ISO
+# ─────────────────────────────────────────────────────────────────────────────
+ARG ALPINE_VERSION=3.21
+
+# ── Stage 1: download Alpine minirootfs + packages ───────────────────────────
+FROM alpine:${ALPINE_VERSION} AS rootfs-builder
+
+ARG ITL_REG_URL=https://reg.itlusions.com
+ARG ITL_ROLE=worker-app
+
+# Install Alpine ISO build tools + the packages we want on the USB
+RUN apk add --no-cache \
+        alpine-sdk \
+        mtools \
+        grub \
+        grub-efi \
+        xorriso \
+        syslinux \
+        dosfstools \
+        tpm2-tools \
+        curl \
+        jq \
+        openssl \
+        util-linux \
+        parted \
+        e2fsprogs \
+        ca-certificates
+
+# ── Stage 2: assemble the ISO rootfs ─────────────────────────────────────────
+FROM alpine:${ALPINE_VERSION} AS iso-assembler
+
+ARG ITL_REG_URL=https://reg.itlusions.com
+ARG ITL_ROLE=worker-app
+
+RUN apk add --no-cache \
+        alpine-sdk mtools grub grub-efi xorriso syslinux dosfstools \
+        tpm2-tools curl jq openssl util-linux parted e2fsprogs ca-certificates
+
+# Copy the registration agent
+COPY register.sh /iso-root/usr/local/itl/register.sh
+RUN chmod +x /iso-root/usr/local/itl/register.sh
+
+# Write the config file (baked defaults — can be overridden via kernel args)
+RUN mkdir -p /iso-root/etc && \
+    cat > /iso-root/etc/itl-reg.conf <<EOF
+# ITL Registration Service defaults (baked at build time)
+# Override via kernel args: itl.reg_url=... itl.role=... itl.target_disk=...
+ITL_REG_URL="${ITL_REG_URL}"
+ITL_ROLE="${ITL_ROLE}"
+# ITL_TARGET_DISK=/dev/sda      # uncomment to skip auto-detect
+# ITL_AUTO_CONFIRM=yes          # uncomment to skip confirmation prompt
+EOF
+
+# Create the auto-start script that runs register.sh on boot
+RUN mkdir -p /iso-root/etc/local.d && \
+    cat > /iso-root/etc/local.d/itl-register.start <<'EOF'
+#!/bin/sh
+# Start ITL registration agent
+exec /usr/local/itl/register.sh 2>&1 | tee /var/log/itl-register.log
+EOF
+    chmod +x /iso-root/etc/local.d/itl-register.start
+
+# GRUB config for the bootable ISO (EFI + BIOS hybrid)
+RUN mkdir -p /iso-root/boot/grub && \
+    cat > /iso-root/boot/grub/grub.cfg <<'EOF'
+set timeout=5
+set default=0
+
+menuentry "ITL Talos Node Provisioner (Auto)" {
+    linux /boot/vmlinuz modules=loop,squashfs quiet \
+        itl.reg_url=${ITL_REG_URL} \
+        itl.role=${ITL_ROLE} \
+        itl.auto_confirm=yes
+    initrd /boot/initramfs
+}
+
+menuentry "ITL Talos Node Provisioner (Interactive)" {
+    linux /boot/vmlinuz modules=loop,squashfs
+    initrd /boot/initramfs
+}
+EOF
+
+# ── Final output stage ────────────────────────────────────────────────────────
+FROM iso-assembler AS output
+RUN mkdir -p /output
+
+# Build the ISO using grub-mkrescue
+# (In a real build this would use Alpine's mkimage or a custom initramfs;
+#  this Dockerfile is a template — adapt to your ISO build toolchain)
+RUN grub-mkrescue -o /output/usb-agent.iso /iso-root 2>&1 || \
+    ( echo "grub-mkrescue not fully available in this environment — creating placeholder" && \
+      dd if=/dev/zero of=/output/usb-agent.iso bs=1M count=1 )

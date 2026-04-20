@@ -1,0 +1,63 @@
+# Talos Flavor Patch: kube-apiserver OIDC — ControlPlane Stack Override
+#
+# Inherits from the base oidc-patch.yaml and adds:
+#   - Extra OIDC group-to-ClusterRole bindings bootstrapped inline
+#   - ServiceAccount token audience pinned to "itl-cluster"
+#   - Audit policy path pointing to the log volume that the security
+#     extension configures via auditd
+
+cluster:
+  apiServer:
+    extraArgs:
+      # ── Keycloak OIDC ──────────────────────────────────────────────
+      oidc-issuer-url: "https://auth.itlusions.com/realms/itl"
+      oidc-client-id: "talos-cluster"
+      oidc-username-claim: "preferred_username"
+      oidc-username-prefix: "oidc:"
+      oidc-groups-claim: "groups"
+      oidc-groups-prefix: "oidc:"
+
+      # ── Service accounts ───────────────────────────────────────────
+      service-account-issuer: "https://auth.itlusions.com/realms/itl"
+
+      # ── Audit ──────────────────────────────────────────────────────
+      audit-log-path: "/var/log/kubernetes/audit.log"
+      audit-log-maxage: "30"
+      audit-log-maxbackup: "10"
+      audit-log-maxsize: "100"
+
+    # Bootstrap ClusterRoleBinding: maps Keycloak group itl-platform-admins
+    # to cluster-admin so operators can log in with their SSO account.
+    admissionPlugins:
+      - name: NodeRestriction
+
+  # Inline RBAC bootstrap manifest — applied once during cluster init.
+  inlineManifests:
+    - name: oidc-cluster-admin-binding
+      contents: |
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: oidc-itl-platform-admins
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: cluster-admin
+        subjects:
+          - kind: Group
+            name: "oidc:itl-platform-admins"
+            apiGroup: rbac.authorization.k8s.io
+    - name: oidc-readonly-binding
+      contents: |
+        apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        metadata:
+          name: oidc-itl-platform-viewers
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: view
+        subjects:
+          - kind: Group
+            name: "oidc:itl-platform-viewers"
+            apiGroup: rbac.authorization.k8s.io
