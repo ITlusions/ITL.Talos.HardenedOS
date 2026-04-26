@@ -1,0 +1,124 @@
+# ITL Kyverno ClusterPolicy Manifests
+# Profile   : security
+# Generated : by scripts/generate-kyverno-patch.py
+# Source    : ITL.ControlPanel.PolicyBuilder
+#
+# Description: Core security policies — pod security, privilege escalation, image hygiene
+#
+# NOTE: Kyverno must be installed before these policies take effect.
+#   Install Kyverno: https://kyverno.io/docs/installation/
+#   Recommended: add kyverno via flavors/controlplane-stack or a Helm release.
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  annotations:
+    description: Enforce Kubernetes Pod Security Standards (baseline). Prevents unprivileged
+      container escalation.
+  labels:
+    app.kubernetes.io/name: pod-security-baseline
+  name: pod-security-baseline
+spec:
+  background: true
+  failurePolicy: ignore
+  rules:
+  - match:
+      kind: Pod
+    message: Security context is required
+    name: check-security-context
+    pattern:
+      spec:
+        securityContext: '?'
+    validationAction: enforce
+  - match:
+      kind: Pod
+    message: Running as root is not allowed
+    name: check-non-root
+    pattern:
+      spec:
+        securityContext:
+          runAsNonRoot: true
+    validationAction: enforce
+  validationFailureAction: audit
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  annotations:
+    description: Prevent deployment of privileged containers. Major security vulnerability.
+  labels:
+    app.kubernetes.io/name: disallow-privileged-containers
+  name: disallow-privileged
+spec:
+  background: true
+  failurePolicy: ignore
+  rules:
+  - match:
+      kind: Pod
+    message: Privileged containers are not allowed
+    name: check-privileged
+    pattern:
+      spec:
+        containers:
+        - securityContext:
+            privileged: false
+    validationAction: enforce
+  validationFailureAction: enforce
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  annotations:
+    description: Prevent deployment of images with 'latest' tag. Requires explicit
+      version for reproducibility.
+  labels:
+    app.kubernetes.io/name: disallow-latest-image-tag
+  name: disallow-latest-tag
+spec:
+  background: true
+  failurePolicy: ignore
+  rules:
+  - match:
+      kind: Pod
+    message: Image tag 'latest' is not allowed, use explicit version
+    name: check-image-tag
+    pattern:
+      spec:
+        containers:
+        - image: '!*:latest'
+    validationAction: enforce
+  validationFailureAction: enforce
+
+---
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  annotations:
+    description: Ensure all containers specify resource requests and limits to prevent
+      resource exhaustion.
+  labels:
+    app.kubernetes.io/name: require-resource-limits
+  name: require-resource-limits
+spec:
+  background: true
+  failurePolicy: ignore
+  rules:
+  - match:
+      kind: Pod
+    message: CPU and memory resources must be specified
+    name: check-resource-limits
+    pattern:
+      spec:
+        containers:
+        - resources:
+            limits:
+              cpu: '?'
+              memory: '?'
+            requests:
+              cpu: '?'
+              memory: '?'
+    validationAction: enforce
+  validationFailureAction: enforce

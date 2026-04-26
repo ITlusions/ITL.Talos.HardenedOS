@@ -1,184 +1,132 @@
-# Generate ISO image from ITL Talos HardenedOS Docker installer
-# Prerequisites: talosctl must be installed
+# ─────────────────────────────────────────────────────────────────────────────
+# ITL Talos HardenedOS — Imager-based ISO build (Windows / Docker Desktop)
+#
+# Uses the official Talos imager to bake ITL extensions directly into the ISO.
+# Requires Docker Desktop with WSL2 backend.
+#
+# Usage:
+#   .\build-iso.ps1
+#   .\build-iso.ps1 -TalosVersion v1.9.0 -ExtraExtensions @("ghcr.io/myorg/myext:v1")
+# ─────────────────────────────────────────────────────────────────────────────
 
 param(
-    [string]$OutputDir = "$(Split-Path -Parent $MyInvocation.MyCommand.Path)\iso-output",
-    [string]$ImageTag = "itl-talos-hardened:installer-v1.9.0"
+    [string]$OutputDir        = "$(Split-Path -Parent $MyInvocation.MyCommand.Path)\iso-output",
+    [string]$TalosVersion     = "v1.9.0",
+    [string]$ITLBrandingTag   = "latest",
+    [string]$ITLSecurityTag   = "latest",
+    # Check https://github.com/siderolabs/extensions for compatible tags per Talos version
+    [string]$GvisorTag        = "v20231214.0-v1.9.0",
+    [string]$IntelUcodeTag    = "20240312-v1.9.0",
+    # Optional: additional OCI image refs to bake in on top of the core set
+    # e.g.: @("ghcr.io/siderolabs/hello-world:v1.0.0", "ghcr.io/myorg/myext:latest")
+    [string[]]$ExtraExtensions = @()
 )
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host "========================================================" -ForegroundColor Cyan
-Write-Host "  ITL Talos HardenedOS - ISO Build" -ForegroundColor Cyan
+Write-Host "  ITL Talos HardenedOS — Imager Build" -ForegroundColor Cyan
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host ""
+Write-Host "  Talos Version : $TalosVersion" -ForegroundColor Yellow
+Write-Host "  Output Dir    : $OutputDir" -ForegroundColor Yellow
+Write-Host ""
 
-# Create output directory
 New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
-Write-Host "[*] Output directory: $OutputDir" -ForegroundColor Yellow
+$OutDir = (Resolve-Path $OutputDir).Path
 
-# Check if talosctl is available
-Write-Host "[*] Checking for talosctl..." -ForegroundColor Yellow
+# ── Build extension argument list ─────────────────────────────────────────────
+$ExtensionArgs = @(
+    "--system-extension-image", "ghcr.io/itlusions/itl-talos-hardened-os-branding:$ITLBrandingTag",
+    "--system-extension-image", "ghcr.io/itlusions/itl-talos-hardened-os-security:$ITLSecurityTag",
+    "--system-extension-image", "ghcr.io/siderolabs/gvisor:$GvisorTag",
+    "--system-extension-image", "ghcr.io/siderolabs/intel-ucode:$IntelUcodeTag"
+)
+
+foreach ($ext in $ExtraExtensions) {
+    $ExtensionArgs += "--system-extension-image", $ext
+}
+
+Write-Host "[*] Extensions to be baked into ISO:" -ForegroundColor Yellow
+$ExtensionArgs | Where-Object { $_ -notlike "--*" } | ForEach-Object {
+    Write-Host "    - $_" -ForegroundColor White
+}
+Write-Host ""
+
+# ── Check Docker ───────────────────────────────────────────────────────────────
+Write-Host "[*] Checking Docker..." -ForegroundColor Yellow
 try {
-    $talosVersion = talosctl version 2>&1 | Select-String "Client:"
-    if ($talosVersion) {
-        Write-Host "  [OK] talosctl found: $talosVersion" -ForegroundColor Green
-    } else {
-        throw "talosctl not properly installed"
-    }
+    $dockerVersion = docker version --format "{{.Server.Version}}" 2>&1
+    Write-Host "  [OK] Docker $dockerVersion" -ForegroundColor Green
 }
 catch {
-    Write-Host "  [!] talosctl not found or not in PATH" -ForegroundColor Red
-    Write-Host "     Installing talosctl..." -ForegroundColor Yellow
-    
-    # Try to install talosctl
-    try {
-        # Download latest talosctl for Windows
-        $latestRelease = Invoke-WebRequest -Uri "https://api.github.com/repos/siderolabs/talos/releases/latest" -UseBasicParsing | ConvertFrom-Json
-        $downloadUrl = $latestRelease.assets | Where-Object { $_.name -like "*windows-amd64*" } | Select-Object -First 1 -ExpandProperty browser_download_url
-        
-        if ($downloadUrl) {
-            Write-Host "  [>] Downloading talosctl from: $downloadUrl" -ForegroundColor Cyan
-            $talosctlPath = Join-Path $env:TEMP "talosctl.exe"
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $talosctlPath -UseBasicParsing
-            
-            # Move to a location in PATH
-            $installPath = "C:\tools"
-            New-Item -ItemType Directory -Path $installPath -Force | Out-Null
-            Move-Item -Path $talosctlPath -Destination "$installPath\talosctl.exe" -Force
-            
-            Write-Host "  [OK] talosctl installed to $installPath" -ForegroundColor Green
-            Write-Host "  [!] Please add C:\tools to your PATH or restart PowerShell" -ForegroundColor Yellow
-        }
-    }
-    catch {
-        Write-Host "  [ERROR] Failed to install talosctl: $_" -ForegroundColor Red
-        Write-Host "  Manual installation: https://www.talos.dev/latest/talos-guides/install/talosctl/" -ForegroundColor Yellow
-        exit 1
-    }
+    Write-Host "  [ERROR] Docker not available. Install Docker Desktop with WSL2 backend." -ForegroundColor Red
+    exit 1
 }
 
-# Method 1: Using Docker to extract ISO directly
+# ── Run imager ────────────────────────────────────────────────────────────────
+# On Windows with Docker Desktop (WSL2 backend), /dev/mapper/control is handled
+# inside the WSL2 VM — no host mount required.
 Write-Host ""
-Write-Host "[*] Step 1: Creating ISO from Docker image..." -ForegroundColor Yellow
-
-# Run custom installer container and extract ISO
-Write-Host "  [>] Generating ISO from $ImageTag..." -ForegroundColor Cyan
-
-# Create a temporary container and extract the ISO
-$containerName = "talos-iso-build-$(Get-Random)"
-
-try {
-    # Run the custom installer to generate ISO (talos includes iso generation tools)
-    docker run --rm `
-        -v "${OutputDir}:/out" `
-        --name $containerName `
-        --entrypoint /bin/sh `
-        $ImageTag `
-        -c "if [ -f /usr/local/bin/talos-installer-iso ]; then /usr/local/bin/talos-installer-iso /out/itl-talos-v1.9.0.iso; else echo 'No ISO generation tool found in image'; fi" | Out-Host
-    
-    # Check if ISO was created
-    if (Test-Path "$OutputDir\*.iso") {
-        Write-Host "  [OK] ISO generated successfully" -ForegroundColor Green
-    } else {
-        Write-Host "  [!] ISO generation method 1 failed, trying method 2..." -ForegroundColor Yellow
-    }
-}
-catch {
-    Write-Host "  [!] Method 1 failed: $_" -ForegroundColor Yellow
-}
-
-# Method 2: Using talosctl to generate ISO from installer image
-if (-not (Test-Path "$OutputDir\*.iso")) {
-    Write-Host "  [>] Attempting ISO generation with talosctl..." -ForegroundColor Cyan
-    
-    try {
-        # Extract installer from Docker image and use talosctl
-        # This requires the installer kernel and initramfs to be available
-        
-        # For now, create a minimal ISO using Docker-in-Docker approach
-        $isoScript = @"
-#!/bin/bash
-set -e
-
-# Install required tools
-apt-get update > /dev/null 2>&1
-apt-get install -y xorriso mkisofs dosfstools > /dev/null 2>&1
-
-# Create ISO directory structure
-TMPDIR=/tmp/iso-build
-mkdir -p \$TMPDIR/boot
-mkdir -p \$TMPDIR/isolinux
-
-# Create minimal ISOLINUX boot configuration
-cat > \$TMPDIR/isolinux/isolinux.cfg << 'BOOTCFG'
-DEFAULT talos
-LABEL talos
-  KERNEL /boot/vmlinuz
-  APPEND initrd=/boot/initramfs.xz console=ttyS0 console=tty0
-BOOTCFG
-
-# Create Talos kernel stubs (placeholder)
-mkdir -p \$TMPDIR/boot
-echo "TALOS KERNEL STUB" > \$TMPDIR/boot/vmlinuz
-echo "TALOS INITRAMFS STUB" > \$TMPDIR/boot/initramfs.xz
-
-# Create ISO
-mkisofs -o /out/itl-talos-v1.9.0.iso \
-  -b isolinux/isolinux.bin \
-  -c isolinux/boot.cat \
-  -no-emul-boot \
-  -boot-load-size 4 \
-  -boot-info-table \
-  -J \
-  -R \
-  -V "ITL-TALOS-1.9.0" \
-  \$TMPDIR
-
-chmod 644 /out/itl-talos-v1.9.0.iso
-ls -lh /out/itl-talos-v1.9.0.iso
-echo "ISO created successfully"
-"@
-        
-        docker run --rm `
-            -v "${OutputDir}:/out" `
-            ubuntu:24.04 bash -c $isoScript | Out-Host
-        
-        Write-Host "  [OK] ISO generated with talosctl method" -ForegroundColor Green
-    }
-    catch {
-        Write-Host "  [!] ISO generation failed: $_" -ForegroundColor Yellow
-        Write-Host "     The Docker image was built successfully but ISO generation requires additional tools" -ForegroundColor Yellow
-    }
-}
-
-# Verify ISO
+Write-Host "[*] Running Talos imager (ghcr.io/siderolabs/imager:$TalosVersion)..." -ForegroundColor Yellow
+Write-Host "    This pulls extensions from GHCR and builds the ISO." -ForegroundColor DarkGray
+Write-Host "    First run may take a few minutes." -ForegroundColor DarkGray
 Write-Host ""
-Write-Host "[*] Step 2: Verifying ISO..." -ForegroundColor Yellow
 
-if (Test-Path "$OutputDir\*.iso") {
-    $isoFile = Get-Item "$OutputDir\*.iso" | Select-Object -First 1
-    $isoSize = [math]::Round($isoFile.Length / 1MB, 2)
-    Write-Host "  [OK] ISO file created: $($isoFile.Name)" -ForegroundColor Green
-    Write-Host "       Size: $isoSize MB" -ForegroundColor Green
-    Write-Host "       Location: $($isoFile.FullName)" -ForegroundColor Green
-} else {
-    Write-Host "  [!] No ISO file found in output directory" -ForegroundColor Yellow
-    Write-Host "     This is expected - the custom installer image requires full Talos toolchain" -ForegroundColor Yellow
-    Write-Host "     To create a production ISO, use:" -ForegroundColor Yellow
-    Write-Host "     talosctl iso --installer itl-talos-hardened:installer-v1.9.0 --output itl-talos.iso" -ForegroundColor Cyan
+$ImagerArgs = @(
+    "run", "--rm",
+    "-v", "${OutDir}:/out",
+    "ghcr.io/siderolabs/imager:$TalosVersion",
+    "iso"
+) + $ExtensionArgs + @(
+    "--extra-kernel-arg", "console=ttyS0,115200",
+    "--extra-kernel-arg", "console=tty0"
+)
+
+docker @ImagerArgs
+
+# ── Rename output ─────────────────────────────────────────────────────────────
+$IsoSrc = Join-Path $OutDir "metal-amd64.iso"
+$IsoDst = Join-Path $OutDir "itl-talos-$TalosVersion.iso"
+
+if (-not (Test-Path $IsoSrc)) {
+    Write-Host "[ERROR] Imager did not produce output at $IsoSrc" -ForegroundColor Red
+    Get-ChildItem $OutDir | Format-Table
+    exit 1
 }
 
-# Summary
+Move-Item -Path $IsoSrc -Destination $IsoDst -Force
+
+# ── Checksums ─────────────────────────────────────────────────────────────────
+$hash = (Get-FileHash -Algorithm SHA256 $IsoDst).Hash.ToLower()
+"$hash  itl-talos-$TalosVersion.iso" | Set-Content "$IsoDst.sha256" -Encoding UTF8
+Write-Host "[OK] SHA256: $hash" -ForegroundColor Green
+
+$isoSize = [math]::Round((Get-Item $IsoDst).Length / 1MB, 1)
+
 Write-Host ""
 Write-Host "========================================================" -ForegroundColor Green
-Write-Host "  ISO Build Complete" -ForegroundColor Green
+Write-Host "  BUILD COMPLETE" -ForegroundColor Green
 Write-Host "========================================================" -ForegroundColor Green
 Write-Host ""
+Write-Host "  ISO  : $IsoDst" -ForegroundColor Cyan
+Write-Host "  Size : $isoSize MB" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Extensions baked in:" -ForegroundColor Yellow
+Write-Host "    ghcr.io/itlusions/itl-talos-hardened-os-branding:$ITLBrandingTag" -ForegroundColor White
+Write-Host "    ghcr.io/itlusions/itl-talos-hardened-os-security:$ITLSecurityTag" -ForegroundColor White
+Write-Host "    ghcr.io/siderolabs/gvisor:$GvisorTag" -ForegroundColor White
+Write-Host "    ghcr.io/siderolabs/intel-ucode:$IntelUcodeTag" -ForegroundColor White
+foreach ($ext in $ExtraExtensions) {
+    Write-Host "  + $ext" -ForegroundColor Cyan
+}
+Write-Host ""
+Write-Host "  NOTE: machine.install.extensions is no longer required for the" -ForegroundColor DarkGray
+Write-Host "        above extensions — they are already baked into this ISO." -ForegroundColor DarkGray
+Write-Host "        Use it only for additional cluster-specific extensions." -ForegroundColor DarkGray
+Write-Host ""
+Write-Host "  Next: Flash to USB with Rufus (GPT/UEFI), boot node, run setup-cluster-baremetal.ps1" -ForegroundColor Yellow
 
-if (Test-Path "$OutputDir\*.iso") {
-    Write-Host "ISO ready for deployment:" -ForegroundColor Cyan
     Get-Item "$OutputDir\*.iso" | ForEach-Object {
         "  - $($_.FullName) ($([math]::Round($_.Length/1MB, 2)) MB)"
     }

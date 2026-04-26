@@ -1,0 +1,19 @@
+# Bootstrap Manifest: Kyverno namespace
+# Applied by Talos via cluster.inlineManifests during first boot.
+#
+# Kyverno itself is installed via cluster.extraManifests (URL) in cp-kyverno.yaml.
+# This manifest creates the namespace so the Kyverno Helm/manifest install
+# has a target namespace ready at bootstrap time.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kyverno
+  labels:
+    itl.io/managed-by: talos-flavor
+    itl.io/flavor: controlplane-stack
+    # Kyverno runs privileged — baseline PSS is correct here
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

@@ -153,28 +153,41 @@ jobs:
 
           echo "[OK] OIDC integration patch applied"
 
-      - name: Add custom extensions
+      - name: Add custom extensions (optional — only needed for cluster-specific extras)
         run: |
           TAG=${{ github.ref_name }}
           # Fall back to 'latest' on workflow_dispatch (no tag)
           [[ -z "$TAG" || "$TAG" == refs/* ]] && TAG="latest"
 
-          # Control plane: branding + security + gVisor + Intel microcode
-          yq eval ".machine.install.extensions += [
-            {\"image\": \"${{ env.REGISTRY }}/itlusions/itl-talos-hardened-os-branding:${TAG}\"},
-            {\"image\": \"${{ env.REGISTRY }}/itlusions/itl-talos-hardened-os-security:${TAG}\"},
-            {\"image\": \"ghcr.io/siderolabs/gvisor:latest\"},
-            {\"image\": \"ghcr.io/siderolabs/intel-ucode:latest\"}
-          ]" -i config/output/controlplane-final.yaml
+          # NOTE: Core extensions (itl-branding, itl-security, gvisor, intel-ucode) are
+          # baked directly into the ISO by the imager (build-iso job).
+          # machine.install.extensions is only needed for ADDITIONAL extensions
+          # that are NOT in the ISO — e.g. cluster-specific or optional ones.
+          #
+          # To add extras, uncomment and extend the yq commands below:
+          #
+          # yq eval ".machine.install.extensions += [
+          #   {\"image\": \"ghcr.io/myorg/my-extra-ext:${TAG}\"}
+          # ]" -i config/output/controlplane-final.yaml
+          #
+          # yq eval ".machine.install.extensions += [
+          #   {\"image\": \"ghcr.io/myorg/my-extra-ext:${TAG}\"}
+          # ]" -i config/output/worker-final.yaml
 
-          # Worker: branding + security + gVisor
-          yq eval ".machine.install.extensions += [
-            {\"image\": \"${{ env.REGISTRY }}/itlusions/itl-talos-hardened-os-branding:${TAG}\"},
-            {\"image\": \"${{ env.REGISTRY }}/itlusions/itl-talos-hardened-os-security:${TAG}\"},
-            {\"image\": \"ghcr.io/siderolabs/gvisor:latest\"}
-          ]" -i config/output/worker-final.yaml
+          echo "[OK] No additional extensions added (core set is baked into ISO)"
 
-          echo "[OK] Custom extensions added"
+      - name: Generate Kyverno policies (from ITL.ControlPanel.PolicyBuilder)
+        run: |
+          echo "[*] Installing ITL PolicyBuilder..."
+          pip install --quiet pyyaml
+          pip install --quiet "git+https://github.com/itlivetech/ITL.ControlPanel.PolicyBuilder.git"
+
+          echo "[*] Generating Kyverno security policies..."
+          python scripts/generate-kyverno-patch.py \
+            --profile security \
+            --output flavors/controlplane-stack/manifests/10-kyverno-policies.yaml
+          echo "[OK] Kyverno policies generated"
+
       
       - name: Validate configurations
         run: |
@@ -235,65 +248,66 @@ jobs:
     name: Build Bootable ISO
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
-    needs: [generate-configs]
+    needs: [build-extensions, generate-configs]
+    permissions:
+      contents: write
+      packages: read
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          echo "[*] Installing dependencies..."
-          sudo apt-get update -qq
-          sudo apt-get install -y xorriso cpio zstd wget
-          echo "[OK] Dependencies installed"
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run build-simple.sh to create ISO
+      - name: Set extension tags
         run: |
-          echo "[*] Running build-simple.sh script..."
+          TAG="${{ github.ref_name }}"
+          # On workflow_dispatch (no tag) fall back to latest
+          [[ -z "$TAG" || "$TAG" == refs/* ]] && TAG="latest"
+          echo "EXT_TAG=$TAG" >> $GITHUB_ENV
+
+      - name: Load device mapper (required by imager)
+        run: |
+          sudo modprobe dm-mod || true
+          ls /dev/mapper/control && echo "[OK] /dev/mapper/control ready" || echo "[!] /dev/mapper/control not found"
+
+      - name: Build ISO via Talos imager
+        env:
+          TALOS_VERSION: ${{ env.TALOS_VERSION }}
+          ITL_BRANDING_TAG: ${{ env.EXT_TAG }}
+          ITL_SECURITY_TAG: ${{ env.EXT_TAG }}
+          # Optional: set EXTRA_EXTENSIONS to bake in additional GHCR extensions
+          # EXTRA_EXTENSIONS: "ghcr.io/siderolabs/hello-world:v1.0.0"
+        run: |
           chmod +x ./build-simple.sh
           ./build-simple.sh
-          echo "[OK] Build script completed"
-          
-          # Copy output to expected location
-          mkdir -p build-output
-          cp -v itl-talos-${{ env.TALOS_VERSION }}.iso build-output/ || true
 
-      - name: Generate ISO checksums
+      - name: Collect build output
         run: |
-          cd build-output
-          
-          ISO_NAME="itl-talos-${{ env.TALOS_VERSION }}.iso"
-          
-          echo "[*] Generating checksums..."
-          sha256sum "$ISO_NAME" > "$ISO_NAME.sha256"
-          sha256sum -c "$ISO_NAME.sha256"
-          
-          md5sum "$ISO_NAME" > "$ISO_NAME.md5"
-          md5sum -c "$ISO_NAME.md5"
-          
-          echo "[OK] Checksums generated"
-          
-          # Create summary file
-          cat > itl-talos-${{ env.TALOS_VERSION }}-info.txt << 'EOF'
-          ITL Talos HardenedOS - Build Information
-          
-          Version: ${{ env.TALOS_VERSION }}
+          mkdir -p build-output
+          cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso"        build-output/
+          cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso.sha256" build-output/
+          cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso.md5"    build-output/
+
+          cat > "build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt" << EOF
+          ITL Talos HardenedOS — Build Information
+          Version   : ${{ env.TALOS_VERSION }}
           Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-          Commit: ${{ github.sha }}
-          Repository: ${{ github.repository }}
-          Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          
-          Contents:
-          - Custom ITL branded Talos installer
-          - Security hardening configuration
-          - Bootable ISO for metal hardware deployment
-          
-          Installation:
-          1. Boot from ISO on target hardware
-          2. Configure network during installation
-          3. Apply Talos configuration using talosctl
-          
-          Documentation: https://www.talos.dev/
+          Commit    : ${{ github.sha }}
+          Tag       : ${{ github.ref_name }}
+
+          Extensions baked in (imager — airgap-ready):
+            ghcr.io/itlusions/itl-talos-hardened-os-branding:${{ env.EXT_TAG }}
+            ghcr.io/itlusions/itl-talos-hardened-os-security:${{ env.EXT_TAG }}
+            ghcr.io/siderolabs/gvisor (pinned tag)
+            ghcr.io/siderolabs/intel-ucode (pinned tag)
+
+          NOTE: machine.install.extensions is not required for the above.
+                Use it only for additional cluster-specific extensions.
           EOF
       
       - name: Upload ISO artifact
@@ -314,33 +328,35 @@ jobs:
             build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
           body: |
             # ITL Talos HardenedOS ${{ github.ref_name }}
-            
-            Custom hardened Talos OS with ITL branding and security enhancements.
-            
-            ## Contents
-            - **itl-talos-${{ env.TALOS_VERSION }}.iso**: Bootable ISO image (metal-amd64)
-            - **Checksums**: SHA256 and MD5 checksums for verification
-            
-            ## Installation
-            1. Download the ISO file
-            2. Create bootable USB/CD media
-            3. Boot target hardware
-            4. Follow Talos installation procedures
-            
-            ## Features
-            - ITL branding and console banners
-            - Security hardening (LUKS2, TPM, Keycloak integration)
-            - Custom Talos extensions
-            - gVisor and Intel microcode support
-            
-            ## Verification
+
+            Security-hardened Talos OS with ITL extensions baked directly into the ISO.
+
+            ## Extensions (pre-installed — airgap-ready)
+            - `itl-talos-hardened-os-branding` — ITLusions console banners, MOTD
+            - `itl-talos-hardened-os-security` — sysctl hardening, audit rules, modprobe policy
+            - `siderolabs/gvisor` — gVisor sandbox runtime
+            - `siderolabs/intel-ucode` — Intel microcode updates
+
+            ## Files
+            | File | Description |
+            |------|-------------|
+            | `itl-talos-${{ env.TALOS_VERSION }}.iso` | Bootable ISO (metal-amd64) |
+            | `.sha256` | SHA256 checksum |
+            | `.md5` | MD5 checksum |
+
+            ## Quick Start
             ```bash
+            # Verify checksum
             sha256sum -c itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+
+            # Flash to USB (Linux/macOS)
+            sudo dd if=itl-talos-${{ env.TALOS_VERSION }}.iso of=/dev/sdX bs=4M status=progress
             ```
-            
-            ## Support
-            - Talos Documentation: https://www.talos.dev/
-            - Repository: ${{ github.repository }}
+            Then run `setup-cluster-baremetal.ps1` — no internet needed on nodes during install.
+
+            ## MachineConfig Note
+            `machine.install.extensions` is **not required** for the bundled extensions.
+            Use it only for additional cluster-specific extensions.
           draft: false
           prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
         env:

@@ -185,6 +185,22 @@ kubectl get nodes -o wide
 - v1.1.0-rc.1 = Release candidate
 - v1.1.0-beta = Beta version
 
+## TalosOps Agent
+
+AI assistant for deploying and customising ITL Talos HardenedOS:
+
+```bash
+cd agents
+cp .env.example .env          # add OPENAI_API_KEY
+pip install -r requirements.txt
+python talos_agent.py
+```
+
+One-shot mode:
+```bash
+python talos_agent.py --question "Generate a 3-node config for 192.168.1.100"
+```
+
 ## See Also
 
 - Visual overview: [02-VISUAL_OVERVIEW.md](02-VISUAL_OVERVIEW.md)

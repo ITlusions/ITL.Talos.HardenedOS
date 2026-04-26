@@ -15,8 +15,9 @@ this flavor adds everything a ControlPlane Stack node needs out of the box.
 | **StorageClass** | Rancher `local-path-provisioner` v0.0.28 as default |
 | **CNI** | Cilium v1.15.6 (replaces Flannel, enables NetworkPolicy) |
 | **Ingress** | Nginx Ingress Controller in `itl-ingress` namespace |
-| **Namespaces** | `itl-controlplane`, `itl-monitoring`, `itl-ingress` |
+| **Namespaces** | `itl-controlplane`, `itl-monitoring`, `itl-ingress`, `kyverno` |
 | **NetworkPolicy** | Default-deny + allow rules for `itl-controlplane` namespace |
+| **Kyverno** | Policy engine v1.12.6 + ITL security policies (from ITL.ControlPanel.PolicyBuilder) |
 | **OIDC** | Keycloak issuer at `https://auth.itlusions.com/realms/itl` |
 | **RBAC** | `itl-platform-admins` → `cluster-admin`, `itl-platform-viewers` → `view` |
 | **Registry mirrors** | `ghcr.io`, `docker.io`, `quay.io` |
