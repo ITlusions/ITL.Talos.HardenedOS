@@ -16,6 +16,14 @@ set -e
 #   INTEL_UCODE_TAG      siderolabs/intel-ucode tag          (default: 20240312-v1.9.0)
 #   EXTRA_EXTENSIONS     Space-separated OCI refs to add on top of core set
 #                        e.g.: "ghcr.io/myorg/myext:v1.0 ghcr.io/other/ext:latest"
+#   PROFILE              Named build profile (default: standard)
+#                        Sources netboot/profiles/<name>.env if present.
+#                        Sets EXTRA_EXTENSIONS from the profile file unless
+#                        EXTRA_EXTENSIONS is already set in the environment.
+#                        Profile name is used as the netboot-assets output dir.
+#   EXTRACT_NETBOOT      Build kernel+initramfs for netboot via the imager after ISO build
+#                        (default: true). Uses 'imager kernel' and 'imager initramfs'
+#                        subcommands — official Talos approach, no ISO mounting needed.
 # ─────────────────────────────────────────────────────────────────────────────
 
 TALOS_VERSION="${TALOS_VERSION:-v1.9.0}"
@@ -23,6 +31,18 @@ ITL_BRANDING_TAG="${ITL_BRANDING_TAG:-latest}"
 ITL_SECURITY_TAG="${ITL_SECURITY_TAG:-latest}"
 GVISOR_TAG="${GVISOR_TAG:-v20231214.0-v1.9.0}"
 INTEL_UCODE_TAG="${INTEL_UCODE_TAG:-20240312-v1.9.0}"
+PROFILE="${PROFILE:-standard}"
+EXTRACT_NETBOOT="${EXTRACT_NETBOOT:-true}"
+
+# ── Load profile env if it exists ─────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILE_FILE="$SCRIPT_DIR/netboot/profiles/${PROFILE}.env"
+if [ -f "$PROFILE_FILE" ] && [ -z "${EXTRA_EXTENSIONS+x}" ]; then
+    # Source profile but protect already-set env vars
+    echo "[*] Loading profile: $PROFILE ($PROFILE_FILE)"
+    # shellcheck disable=SC1090
+    source "$PROFILE_FILE"
+fi
 EXTRA_EXTENSIONS="${EXTRA_EXTENSIONS:-}"
 
 WORK_DIR="$(cd "${1:-.}" && pwd)"
@@ -31,6 +51,7 @@ echo "========================================="
 echo "ITL Talos HardenedOS — Imager Build"
 echo "========================================="
 echo "Talos Version : ${TALOS_VERSION}"
+echo "Profile       : ${PROFILE}"
 echo "Output Dir    : ${WORK_DIR}"
 echo ""
 
@@ -113,3 +134,38 @@ echo "      for the above extensions — they are already in the ISO."
 echo "      Use machine.install.extensions only for additional cluster-specific"
 echo "      extensions not included in this ISO."
 echo "========================================="
+
+# ── Build netboot assets via imager (official Talos approach) ────────────────
+# The imager 'kernel' and 'initramfs' subcommands produce the exact files
+# needed for HTTP netboot — same tool, same extension set as the ISO build.
+if [ "${EXTRACT_NETBOOT}" = "true" ]; then
+    NETBOOT_OUT="${WORK_DIR}/netboot-assets/${PROFILE}"
+    NETBOOT_TMP="${WORK_DIR}/_netboot_tmp"
+    mkdir -p "$NETBOOT_OUT" "$NETBOOT_TMP"
+    echo ""
+    echo "[*] Building netboot kernel (profile: ${PROFILE})..."
+    docker run --rm \
+        -v "${NETBOOT_TMP}:/out" \
+        "ghcr.io/siderolabs/imager:${TALOS_VERSION}" \
+        kernel \
+        --arch amd64
+    echo ""
+    echo "[*] Building netboot initramfs (profile: ${PROFILE})..."
+    docker run --rm \
+        -v "${NETBOOT_TMP}:/out" \
+        "ghcr.io/siderolabs/imager:${TALOS_VERSION}" \
+        initramfs \
+        --arch amd64 \
+        "${EXTENSION_ARGS[@]}"
+    [ -f "${NETBOOT_TMP}/kernel-amd64" ]       && mv "${NETBOOT_TMP}/kernel-amd64"       "${NETBOOT_OUT}/vmlinuz"
+    [ -f "${NETBOOT_TMP}/initramfs-amd64.xz" ] && mv "${NETBOOT_TMP}/initramfs-amd64.xz" "${NETBOOT_OUT}/initramfs.xz"
+    rm -rf "$NETBOOT_TMP"
+    if [ -f "${NETBOOT_OUT}/vmlinuz" ] && [ -f "${NETBOOT_OUT}/initramfs.xz" ]; then
+        echo ""
+        echo "[OK] Netboot assets (profile: ${PROFILE}):"
+        echo "     vmlinuz      : ${NETBOOT_OUT}/vmlinuz      ($(du -h "${NETBOOT_OUT}/vmlinuz" | cut -f1))"
+        echo "     initramfs.xz : ${NETBOOT_OUT}/initramfs.xz ($(du -h "${NETBOOT_OUT}/initramfs.xz" | cut -f1))"
+    else
+        echo "[!] Netboot assets incomplete — check imager output above (non-fatal)"
+    fi
+fi

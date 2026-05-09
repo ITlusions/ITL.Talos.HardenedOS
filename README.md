@@ -80,13 +80,14 @@ Start here based on your needs:
 - Ready to deploy
 - ~500MB
 
-### Docker Images
+### Docker Images (Extension OCI images)
 Published to GitHub Container Registry:
 ```
-ghcr.io/itlusions/itl-talos-hardened-os-installer:v1.0.0
 ghcr.io/itlusions/itl-talos-hardened-os-branding:v1.0.0
 ghcr.io/itlusions/itl-talos-hardened-os-security:v1.0.0
+ghcr.io/itlusions/itl-talos-tpm-register:v1.0.0
 ```
+These are baked into the ISO by `siderolabs/imager` at CI time.
 
 ### Configuration Files
 - `controlplane-final.yaml` — Control plane configuration
@@ -98,13 +99,10 @@ Triggered automatically on tag creation:
 
 ```
 git tag v1.0.0 && git push origin v1.0.0
-    ↓ (5 min)   Build branding
-    ↓ (10 min)  Build extensions
-    ↓ (5 min)   Build installer
-    ↓ (5 min)   Generate configs
-    ↓ (15 min)  Build ISO
+    ↓ (10 min)  Build extension images
+    ↓ (15 min)  Build ISO (siderolabs/imager)
     ↓ (2 min)   Publish release
-    ✅ Done (45 min total)
+    ✅ Done (30 min total)
 ```
 
 ## Customization
@@ -138,13 +136,6 @@ sudo dd if=itl-talos-v1.9.0.iso of=/dev/sdX bs=4M
 ```bash
 talosctl apply-config --nodes <ip> --file controlplane-final.yaml
 talosctl apply-config --nodes <ip> --file worker-final.yaml
-```
-
-### Option 3: Use Custom Installer
-```yaml
-machine:
-  install:
-    image: ghcr.io/itlusions/itl-talos-hardened-os-installer:v1.0.0
 ```
 
 See [05-QUICKSTART.md](docs/05-QUICKSTART.md) for detailed steps.
@@ -181,9 +172,6 @@ See [05-QUICKSTART.md](docs/05-QUICKSTART.md) for detailed steps.
 ITL.Talos.HardenedOS/
 ├── .github/workflows/           GitHub Actions
 │   └── build-talos-hardened.yaml
-├── build/                       Docker & scripts
-│   ├── Dockerfile.installer
-│   └── scripts/
 ├── config/                      Talos configurations
 │   └── patches/
 ├── extensions/                  Custom extensions

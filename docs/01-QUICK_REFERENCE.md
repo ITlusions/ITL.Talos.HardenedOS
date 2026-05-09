@@ -27,11 +27,9 @@ GitHub Release v1.0.0:
 Tag Created (v1.0.0)
   5 min   - Build branding assets
   10 min  - Build Docker extensions
-  5 min   - Build custom installer
-  5 min   - Generate Talos configs
   15 min  - Create bootable ISO
   2 min   - Publish GitHub release
-  Total: 45 minutes (20 min with cache)
+  Total: 35 minutes (15 min with cache)
 ```
 
 ## Deployment Options
@@ -44,13 +42,6 @@ sudo dd if=itl-talos-v1.9.0.iso of=/dev/sdX bs=4M
 **Option 2: Apply config**
 ```bash
 talosctl apply-config --nodes <ip> --file controlplane-final.yaml
-```
-
-**Option 3: Use installer**
-```yaml
-machine:
-  install:
-    image: ghcr.io/itlusions/itl-talos-hardened-os-installer:v1.0.0
 ```
 
 ## Customize Before Releasing
@@ -66,11 +57,8 @@ machine:
 
 Visit GitHub Actions Tab: "Build Custom Talos OS"
 
-Shows all 6 jobs:
-- build-branding
+Shows all 4 jobs:
 - build-extensions
-- build-installer
-- generate-configs
 - build-iso
 - create-release
 
@@ -96,7 +84,6 @@ Visit Releases Tab, download:
 | Problem | Fix |
 |---------|-----|
 | Build doesn't start | Check tag format: v1.0.0 (not 1.0.0) |
-| Build times out | Retry - Image Factory API can be slow |
 | ISO missing | Wait longer - 15 min step can be slow |
 
 ---

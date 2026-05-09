@@ -145,132 +145,35 @@ Builds security and custom extensions in parallel using a matrix strategy.
 
 ---
 
-### Job 3: build-installer (5 minutes)
+### Job 3: build-iso (15 minutes)
 
-Assembles the custom Talos installer image from branding + extensions.
-
-```yaml
-  build-installer:
-    runs-on: ubuntu-latest
-    needs:
-      - build-branding
-      - build-extensions
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and Push Installer
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./build/Dockerfile.installer
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/itl-talos-hardened-os-installer:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/itl-talos-hardened-os-installer:latest
-          build-args: |
-            TALOS_VERSION=${{ env.TALOS_VERSION }}
-            BRANDING_IMAGE=${{ needs.build-branding.outputs.branding-tag }}
-          cache-from: type=registry
-          cache-to: type=inline
-```
-
----
-
-### Job 4: generate-configs (5 minutes)
-
-Runs talosctl inside the installer container to generate and patch configuration YAML files.
-
-```yaml
-  generate-configs:
-    runs-on: ubuntu-latest
-    needs: build-installer
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Generate Configurations
-        run: |
-          docker run --rm \
-            -v ${PWD}/config:/workspace/config \
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/itl-talos-hardened-os-installer:${{ github.ref_name }} \
-            /bin/sh -c '
-              talosctl gen config itl-talos \
-                https://itl-talos:6443 \
-                --output-dir /workspace/config/output
-
-              yq eval-all "select(fileIndex==0) * select(fileIndex==1)" \
-                /workspace/config/output/controlplane.yaml \
-                /workspace/config/patches/branding-patch.yaml > \
-                /workspace/config/output/controlplane-final.yaml
-
-              yq eval-all "select(fileIndex==0) * select(fileIndex==1)" \
-                /workspace/config/output/controlplane-final.yaml \
-                /workspace/config/patches/security-hardening.yaml > \
-                /workspace/config/output/controlplane-final-secure.yaml
-
-              cp /workspace/config/output/worker.yaml \
-                /workspace/config/output/worker-final.yaml
-            '
-
-      - name: Validate Configurations
-        run: |
-          docker run --rm \
-            -v ${PWD}/config:/workspace/config \
-            ${{ env.REGISTRY }}/${{ env.OWNER }}/itl-talos-hardened-os-installer:${{ github.ref_name }} \
-            /bin/sh -c '
-              talosctl validate --file /workspace/config/output/controlplane-final.yaml
-              talosctl validate --file /workspace/config/output/worker-final.yaml
-            '
-
-      - name: Upload Configs
-        uses: actions/upload-artifact@v4
-        with:
-          name: talos-configs
-          path: config/output/
-          retention-days: 30
-```
-
-**Process**: gen config → apply branding patch → apply security patch → validate → store artifact.
-
----
-
-### Job 5: build-iso (15 minutes)
-
-Calls the Talos Image Factory API to produce the bootable ISO with all extensions embedded.
+Calls `ghcr.io/siderolabs/imager` to bake the extension OCI images into a bootable ISO.
+This is the job that actually fuses the OS with ITL customizations.
 
 ```yaml
   build-iso:
     runs-on: ubuntu-latest
-    needs: generate-configs
+    needs: build-extensions
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download Configs
-        uses: actions/download-artifact@v4
-        with:
-          name: talos-configs
-          path: config/output/
-
-      - name: Build ISO
+      - name: Run imager
         run: |
-          curl -X POST -s \
-            -F arch=amd64 \
-            -F version=${{ env.TALOS_VERSION }} \
-            -F extensions=siderolabs/gvisor:latest \
-            -F extensions=${{ env.REGISTRY }}/${{ env.OWNER }}/itl-talos-hardened-os-branding:${{ github.ref_name }} \
-            -F customization.meta.key1=value1 \
-            https://api.talos.dev/image \
-            > talos-image.tar.gz
+          docker run --rm \
+            -v /dev:/dev \
+            -v ${PWD}/output:/output \
+            --privileged \
+            ghcr.io/siderolabs/imager:${{ env.TALOS_VERSION }} \
+              iso \
+              --arch amd64 \
+              --system-extension-image ghcr.io/itlusions/itl-talos-hardened-os-branding:${{ github.ref_name }} \
+              --system-extension-image ghcr.io/itlusions/itl-talos-hardened-os-security:${{ github.ref_name }} \
+              --system-extension-image ghcr.io/itlusions/itl-talos-tpm-register:${{ github.ref_name }} \
+              --output /output
 
-          tar -xzf talos-image.tar.gz
-          mv talos-image.iso itl-talos-${{ env.TALOS_VERSION }}.iso
+          mv output/metal-amd64.iso itl-talos-${{ env.TALOS_VERSION }}.iso
           sha256sum itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
+          md5sum   itl-talos-${{ env.TALOS_VERSION }}.iso > itl-talos-${{ env.TALOS_VERSION }}.iso.md5
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
@@ -279,29 +182,30 @@ Calls the Talos Image Factory API to produce the bootable ISO with all extension
           path: |
             itl-talos-*.iso
             itl-talos-*.iso.sha256
+            itl-talos-*.iso.md5
           retention-days: 90
 ```
 
-**ISO includes**: Talos Linux v1.9.0, custom branding, security hardening, gVisor runtime (~500MB).
+**ISO includes**: Talos Linux v1.9.0, all three ITL extensions baked in at the filesystem level.
+No network access is required on nodes during installation — the OS is fully self-contained.
 
 ---
 
-### Job 6: create-release (2 minutes)
+### Job 4: create-release (2 minutes)
 
-Creates the GitHub Release and attaches all build artifacts.
+Creates the GitHub Release and attaches the ISO.
 
 ```yaml
   create-release:
     runs-on: ubuntu-latest
-    needs:
-      - build-iso
-      - generate-configs
+    needs: build-iso
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download All Artifacts
+      - name: Download ISO artifact
         uses: actions/download-artifact@v4
         with:
+          name: talos-iso
           path: artifacts/
 
       - name: Create Release
@@ -312,21 +216,15 @@ Creates the GitHub Release and attaches all build artifacts.
           body: |
             ## Release: ${{ github.ref_name }}
 
-            Custom Talos Linux with branding and security hardening.
+            Custom Talos Linux with branding, security hardening, and TPM registration.
 
             ### Included
             - Talos OS: ${{ env.TALOS_VERSION }}
-            - Kubernetes: ${{ env.KUBE_VERSION }}
-            - Custom Branding, Security Hardening, gVisor Runtime
+            - Extensions: itl-branding, itl-security, itl-tpm-register
 
             ### Files
             - `itl-talos-v1.9.0.iso` — Bootable image
-            - `controlplane-final.yaml` — Control plane config
-            - `worker-final.yaml` — Worker node config
-            - `.sha256` — Checksums
-
-            ---
-            Build ID: ${{ github.run_id }}
+            - `.sha256` / `.md5` — Checksums
           artifacts: artifacts/**/*
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
@@ -336,18 +234,14 @@ Creates the GitHub Release and attaches all build artifacts.
 ## Data Flow Between Jobs
 
 ```
-build-branding (image tag output)
+build-extensions (push 3 extension images)
         ↓
-build-extensions ← uses branding image tag
+build-iso  ← pulls extensions, runs siderolabs/imager, produces ISO
         ↓
-build-installer  ← uses extension images
-        ↓
-generate-configs ← uses installer image
-        ↓
-build-iso        ← uses configs + installer
-        ↓
-create-release   ← collects all artifacts
+create-release  ← attaches ISO to GitHub Release
 ```
+
+
 
 ## Configuration
 

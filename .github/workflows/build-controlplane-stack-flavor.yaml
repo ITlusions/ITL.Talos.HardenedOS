@@ -42,6 +42,10 @@ on:
         description: 'Base URL for machineconfig download (leave empty to use GitHub Release URL)'
         required: false
         default: ''
+      extra_extensions:
+        description: 'Extra OCI extension refs to bake into all role ISOs (space-separated)'
+        required: false
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -368,12 +372,32 @@ jobs:
           docker pull ghcr.io/siderolabs/imager:${TALOS_VER}
           echo "[OK] Imager pulled: ${TALOS_VER}"
 
+      - name: Prepare extra extension args
+        run: |
+          # Write each extra extension ref on its own line for safe consumption
+          INPUT="${{ github.event.inputs.extra_extensions }}"
+          > extra-extensions.txt
+          if [ -n "$INPUT" ]; then
+            for ext in $INPUT; do
+              trimmed="$(echo "$ext" | xargs)"
+              [ -n "$trimmed" ] && echo "$trimmed" >> extra-extensions.txt
+            done
+          fi
+          echo "[*] Extra extensions to bake into all role ISOs:"
+          cat extra-extensions.txt || echo "  (none)"
+
       - name: Build — ControlPlane ISO
         run: |
           TALOS_VER=${{ needs.build-extensions.outputs.talos_version }}
           IMG_TAG=${{ needs.build-extensions.outputs.image_tag }}
           CONFIG_URL="${{ needs.stage-configs.outputs.cp_config_url }}"
           mkdir -p iso-output
+
+          # Build extra extension args from file written in prep step
+          EXTRA_EXT_ARGS=()
+          while IFS= read -r ext; do
+            [ -n "$ext" ] && EXTRA_EXT_ARGS+=(--system-extension-image "$ext")
+          done < <(cat extra-extensions.txt 2>/dev/null || true)
 
           # The imager pulls all --system-extension-image refs from GHCR (OCI)
           # at build time and bakes them into the squashfs/initramfs of the ISO.
@@ -390,6 +414,7 @@ jobs:
             --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
             --system-extension-image ghcr.io/siderolabs/gvisor:latest \
             --system-extension-image ghcr.io/siderolabs/intel-ucode:latest \
+            "${EXTRA_EXT_ARGS[@]}" \
             --extra-kernel-arg "talos.config=${CONFIG_URL}" \
             --extra-kernel-arg "itl.flavor=controlplane-stack" \
             --extra-kernel-arg "itl.role=controlplane" \
@@ -408,6 +433,11 @@ jobs:
           IMG_TAG=${{ needs.build-extensions.outputs.image_tag }}
           CONFIG_URL="${{ needs.stage-configs.outputs.wi_config_url }}"
 
+          EXTRA_EXT_ARGS=()
+          while IFS= read -r ext; do
+            [ -n "$ext" ] && EXTRA_EXT_ARGS+=(--system-extension-image "$ext")
+          done < <(cat extra-extensions.txt 2>/dev/null || true)
+
           docker run --rm \
             -v "$PWD/iso-output:/out" \
             -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
@@ -419,6 +449,7 @@ jobs:
             --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security:${IMG_TAG} \
             --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
             --system-extension-image ghcr.io/siderolabs/gvisor:latest \
+            "${EXTRA_EXT_ARGS[@]}" \
             --extra-kernel-arg "talos.config=${CONFIG_URL}" \
             --extra-kernel-arg "itl.flavor=controlplane-stack" \
             --extra-kernel-arg "itl.role=worker-infra" \
@@ -437,6 +468,11 @@ jobs:
           IMG_TAG=${{ needs.build-extensions.outputs.image_tag }}
           CONFIG_URL="${{ needs.stage-configs.outputs.wa_config_url }}"
 
+          EXTRA_EXT_ARGS=()
+          while IFS= read -r ext; do
+            [ -n "$ext" ] && EXTRA_EXT_ARGS+=(--system-extension-image "$ext")
+          done < <(cat extra-extensions.txt 2>/dev/null || true)
+
           docker run --rm \
             -v "$PWD/iso-output:/out" \
             -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
@@ -448,6 +484,7 @@ jobs:
             --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security:${IMG_TAG} \
             --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
             --system-extension-image ghcr.io/siderolabs/gvisor:latest \
+            "${EXTRA_EXT_ARGS[@]}" \
             --extra-kernel-arg "talos.config=${CONFIG_URL}" \
             --extra-kernel-arg "itl.flavor=controlplane-stack" \
             --extra-kernel-arg "itl.role=worker-app" \
@@ -460,12 +497,102 @@ jobs:
 
           echo "[OK] Worker-App ISO built"
 
+      - name: Build netboot assets
+        run: |
+          # Use the Talos imager directly with 'kernel' and 'initramfs' subcommands.
+          # This is the official approach — same tool, same extension sets as the ISO builds.
+          # The kernel binary is the same for all roles; the initramfs differs because
+          # ControlPlane includes intel-ucode while workers do not.
+          TALOS_VER=${{ needs.build-extensions.outputs.talos_version }}
+          IMG_TAG=${{ needs.build-extensions.outputs.image_tag }}
+          mkdir -p netboot-assets
+
+          # Reconstruct extra extension args from prep step
+          EXTRA_EXT_ARGS=()
+          while IFS= read -r ext; do
+            [ -n "$ext" ] && EXTRA_EXT_ARGS+=(--system-extension-image "$ext")
+          done < <(cat extra-extensions.txt 2>/dev/null || true)
+
+          # ── ControlPlane: branding + security + tpm-register + gvisor + intel-ucode ──
+          echo "[*] Building kernel for controlplane..."
+          mkdir -p netboot-assets/cpstack-controlplane
+          docker run --rm \
+            -v "$PWD/netboot-assets/cpstack-controlplane:/out" \
+            -v "$HOME/.docker/config.json:/run/containers/auth.json:ro" \
+            -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
+            ghcr.io/siderolabs/imager:${TALOS_VER} \
+            kernel --arch amd64
+
+          echo "[*] Building initramfs for controlplane..."
+          docker run --rm \
+            -v "$PWD/netboot-assets/cpstack-controlplane:/out" \
+            -v "$HOME/.docker/config.json:/run/containers/auth.json:ro" \
+            -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
+            ghcr.io/siderolabs/imager:${TALOS_VER} \
+            initramfs --arch amd64 \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-branding:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
+            --system-extension-image ghcr.io/siderolabs/gvisor:latest \
+            --system-extension-image ghcr.io/siderolabs/intel-ucode:latest \
+            "${EXTRA_EXT_ARGS[@]}"
+
+          # Rename to standard netboot filenames
+          mv netboot-assets/cpstack-controlplane/kernel-amd64       netboot-assets/cpstack-controlplane/vmlinuz
+          mv netboot-assets/cpstack-controlplane/initramfs-amd64.xz netboot-assets/cpstack-controlplane/initramfs.xz
+          echo "[OK] ControlPlane netboot assets built"
+
+          # ── Workers: branding + security + tpm-register + gvisor (no intel-ucode) ──
+          # Both worker roles use the same extension set → build once, copy for the second.
+          echo "[*] Building kernel for workers..."
+          mkdir -p netboot-assets/_worker-tmp
+          docker run --rm \
+            -v "$PWD/netboot-assets/_worker-tmp:/out" \
+            -v "$HOME/.docker/config.json:/run/containers/auth.json:ro" \
+            -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
+            ghcr.io/siderolabs/imager:${TALOS_VER} \
+            kernel --arch amd64
+
+          echo "[*] Building initramfs for workers..."
+          docker run --rm \
+            -v "$PWD/netboot-assets/_worker-tmp:/out" \
+            -v "$HOME/.docker/config.json:/run/containers/auth.json:ro" \
+            -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
+            ghcr.io/siderolabs/imager:${TALOS_VER} \
+            initramfs --arch amd64 \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-branding:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
+            --system-extension-image ghcr.io/siderolabs/gvisor:latest \
+            "${EXTRA_EXT_ARGS[@]}"
+
+          for ROLE in worker-infra worker-app; do
+            mkdir -p netboot-assets/cpstack-${ROLE}
+            cp netboot-assets/_worker-tmp/kernel-amd64       netboot-assets/cpstack-${ROLE}/vmlinuz
+            cp netboot-assets/_worker-tmp/initramfs-amd64.xz netboot-assets/cpstack-${ROLE}/initramfs.xz
+            echo "[OK] ${ROLE} netboot assets ready"
+          done
+          rm -rf netboot-assets/_worker-tmp
+
+          # Copy iPXE menu alongside assets
+          cp netboot/menu.ipxe netboot-assets/
+
+          echo "[*] Netboot assets summary:"
+          find netboot-assets -type f | sort
+
       - name: Upload ISO artifacts
         uses: actions/upload-artifact@v4
         with:
           name: talos-isos-${{ env.FLAVOR }}
           path: iso-output/
           retention-days: 7
+
+      - name: Upload netboot assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: netboot-assets-${{ env.FLAVOR }}
+          path: netboot-assets/
+          retention-days: 30
 
   # ── Step 5: publish the release with ISOs + config bundle ───────────────────
   finalize-release:
@@ -489,6 +616,12 @@ jobs:
           name: talos-configs-${{ env.FLAVOR }}
           path: configs/
 
+      - name: Download netboot assets
+        uses: actions/download-artifact@v4
+        with:
+          name: netboot-assets-${{ env.FLAVOR }}
+          path: netboot/
+
       - name: Package config bundle
         run: |
           cd configs
@@ -506,6 +639,8 @@ jobs:
             isos/*.iso.sha256
             itl-cpstack-configs-${{ github.ref_name }}.tar.gz
             itl-cpstack-configs-${{ github.ref_name }}.tar.gz.sha256
+            netboot/menu.ipxe
+            netboot/cpstack-*/**
           body: |
             # ITL Talos — ControlPlane Stack ${{ github.ref_name }}
 

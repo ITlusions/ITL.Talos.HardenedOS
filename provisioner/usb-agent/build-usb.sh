@@ -19,7 +19,6 @@ ALPINE_VERSION="${ALPINE_VERSION:-3.21}"
 ITL_REG_URL="${ITL_REG_URL:-https://reg.itlusions.com}"
 ITL_ROLE="${ITL_ROLE:-worker-app}"
 DIST_DIR="$(dirname "$0")/../../dist"
-IMAGE_TAG="itl-talos-usb-builder"
 OUTPUT_ISO="${DIST_DIR}/itl-talos-usb-agent-$(date +%Y%m%d).iso"
 
 mkdir -p "$DIST_DIR"
@@ -31,19 +30,20 @@ echo "  Default reg URL: ${ITL_REG_URL}"
 echo "  Default role   : ${ITL_ROLE}"
 echo "══════════════════════════════════════════════════════"
 
-# ── Build Docker image that contains the USB ISO creation logic ──────────────
-docker build \
+TMP_OUT="${DIST_DIR}/__usb_out"
+mkdir -p "${TMP_OUT}"
+
+# ── Build with BuildKit --output to extract the ISO directly ─────────────────
+DOCKER_BUILDKIT=1 docker build \
     --build-arg ALPINE_VERSION="${ALPINE_VERSION}" \
     --build-arg ITL_REG_URL="${ITL_REG_URL}" \
     --build-arg ITL_ROLE="${ITL_ROLE}" \
-    -t "${IMAGE_TAG}" \
+    --output "type=local,dest=${TMP_OUT}" \
     -f "$(dirname "$0")/Dockerfile.usb-builder" \
     "$(dirname "$0")"
 
-# ── Extract the ISO from the container ───────────────────────────────────────
-CID=$(docker create "${IMAGE_TAG}")
-docker cp "${CID}:/output/usb-agent.iso" "${OUTPUT_ISO}"
-docker rm -f "${CID}"
+mv "${TMP_OUT}/usb-agent.iso" "${OUTPUT_ISO}"
+rm -rf "${TMP_OUT}"
 
 echo ""
 echo "USB agent ISO built: ${OUTPUT_ISO}"

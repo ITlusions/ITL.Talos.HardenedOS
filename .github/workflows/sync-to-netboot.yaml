@@ -1,0 +1,184 @@
+name: Sync to Network Boot Servers
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to sync (e.g. v1.9.0). Defaults to latest release.'
+        required: false
+        default: ''
+      profile:
+        description: 'Build profile whose netboot assets to sync (standard | gpu | storage | proxmox)'
+        required: false
+        default: 'standard'
+
+env:
+  DEFAULT_WEBROOT: /var/www/netboot
+  DEFAULT_USER: root
+  DEFAULT_PROFILE: standard
+
+jobs:
+  sync-to-netboot:
+    name: Sync to netboot server(s)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Determine release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.event_name }}" = "release" ]; then
+            TAG="${{ github.event.release.tag_name }}"
+          else
+            TAG=$(gh release view --repo "${{ github.repository }}" --json tagName -q .tagName)
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "[*] Syncing release: $TAG"
+
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          echo "[*] Downloading release assets for $TAG..."
+          gh release download "$TAG" \
+            --repo "${{ github.repository }}" \
+            --dir release-assets \
+            --pattern "*.iso" \
+            --pattern "*.sha256" \
+            --pattern "*.md5" \
+            --pattern "*.txt" \
+            --pattern "menu.ipxe" \
+            --pattern "vmlinuz" \
+            --pattern "initramfs.xz" \
+            --pattern "controlplane-final.yaml" \
+            --pattern "worker-final.yaml"
+          echo "[OK] Downloaded:"
+          find release-assets -type f | sort
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.NETBOOT_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+      - name: Configure SSH known hosts
+        run: |
+          # NETBOOT_KNOWN_HOSTS should contain the output of:
+          #   ssh-keyscan netboot-host1 netboot-host2 ...
+          # Set it as a repository secret to enable strict host key checking.
+          if [ -n "${{ secrets.NETBOOT_KNOWN_HOSTS }}" ]; then
+            printf '%s\n' "${{ secrets.NETBOOT_KNOWN_HOSTS }}" >> ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+            echo "[OK] Known hosts loaded from secret"
+          else
+            echo "[!] NETBOOT_KNOWN_HOSTS secret not set — disabling strict host key checking"
+            echo "[!] Add the secret to enable verification (recommended for production)"
+            printf 'StrictHostKeyChecking no\nUserKnownHostsFile /dev/null\n' >> ~/.ssh/config
+          fi
+
+      - name: Sync to netboot server(s)
+        env:
+          # NETBOOT_SERVERS: comma-separated list of hostnames for multi-site deployments
+          #   e.g. "netboot-ams.itlusions.local,netboot-lon.itlusions.local"
+          # NETBOOT_SERVER: single hostname for simple single-server setups
+          # NETBOOT_SERVERS takes precedence when both are set.
+          NETBOOT_SERVERS: ${{ secrets.NETBOOT_SERVERS || secrets.NETBOOT_SERVER }}
+          NETBOOT_USER: ${{ secrets.NETBOOT_USER || env.DEFAULT_USER }}
+          NETBOOT_WEBROOT: ${{ secrets.NETBOOT_WEBROOT || env.DEFAULT_WEBROOT }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          PROFILE: ${{ inputs.profile || env.DEFAULT_PROFILE }}
+        run: |
+          if [ -z "$NETBOOT_SERVERS" ]; then
+            echo "[ERROR] Neither NETBOOT_SERVERS nor NETBOOT_SERVER secret is configured."
+            echo "[ERROR] Set at least one of these repository secrets and re-run."
+            exit 1
+          fi
+
+          IFS=',' read -ra SERVERS <<< "$NETBOOT_SERVERS"
+          FAILED=0
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | xargs)  # trim surrounding whitespace
+            REMOTE="${NETBOOT_USER}@${SERVER}"
+            IMGDIR="${NETBOOT_WEBROOT}/images/itl-hardened"
+            CFGDIR="${NETBOOT_WEBROOT}/config/itl-hardened"
+            BOOTDIR="${NETBOOT_WEBROOT}/boot"
+
+            echo ""
+            echo "===== Syncing $TAG → $SERVER ====="
+
+            # Ensure remote directories exist
+            if ! ssh "$REMOTE" "mkdir -p '$IMGDIR' '$CFGDIR' '$BOOTDIR'"; then
+              echo "[ERROR] Cannot connect to $SERVER — skipping"
+              FAILED=$((FAILED + 1))
+              continue
+            fi
+
+            # --- ISO + checksums ---
+            for f in release-assets/*.iso release-assets/*.sha256 release-assets/*.md5 release-assets/*.txt; do
+              [ -f "$f" ] || continue
+              scp "$f" "$REMOTE:$IMGDIR/" && echo "  -> $(basename "$f")"
+            done
+
+            # --- Netboot kernel + initramfs ---
+            # Build pipeline stores these under netboot/<profile>/ in the release.
+            # Fall back to flat layout (vmlinuz / initramfs.xz at root of release assets).
+            KERNEL_SRC=""
+            INITRD_SRC=""
+            if [ -f "release-assets/netboot/${PROFILE}/vmlinuz" ]; then
+              KERNEL_SRC="release-assets/netboot/${PROFILE}/vmlinuz"
+              INITRD_SRC="release-assets/netboot/${PROFILE}/initramfs.xz"
+            elif [ -f "release-assets/vmlinuz" ]; then
+              KERNEL_SRC="release-assets/vmlinuz"
+              INITRD_SRC="release-assets/initramfs.xz"
+            fi
+
+            if [ -n "$KERNEL_SRC" ] && [ -f "$KERNEL_SRC" ]; then
+              scp "$KERNEL_SRC"  "$REMOTE:$IMGDIR/vmlinuz"      && echo "  -> vmlinuz"
+              scp "$INITRD_SRC"  "$REMOTE:$IMGDIR/initramfs.xz" && echo "  -> initramfs.xz"
+            else
+              echo "  [!] No kernel/initramfs found for profile '$PROFILE' — skipping"
+            fi
+
+            # --- iPXE boot menu ---
+            if [ -f "release-assets/menu.ipxe" ]; then
+              scp release-assets/menu.ipxe "$REMOTE:$BOOTDIR/menu.ipxe" && echo "  -> menu.ipxe"
+            fi
+
+            # --- Machine configs ---
+            for cfg in controlplane-final.yaml worker-final.yaml; do
+              if [ -f "release-assets/$cfg" ]; then
+                scp "release-assets/$cfg" "$REMOTE:$CFGDIR/$cfg" && echo "  -> $cfg"
+              else
+                echo "  [!] $cfg not found in release assets — skipping"
+              fi
+            done
+
+            # --- VERSION marker ---
+            ssh "$REMOTE" "echo '$TAG' > '${NETBOOT_WEBROOT}/VERSION'"
+
+            # --- Verify ---
+            REMOTE_VERSION=$(ssh "$REMOTE" "cat '${NETBOOT_WEBROOT}/VERSION' 2>/dev/null || echo unknown")
+            if [ "$REMOTE_VERSION" = "$TAG" ]; then
+              echo "[OK] $SERVER synced — VERSION=$REMOTE_VERSION"
+            else
+              echo "[ERROR] VERSION mismatch on $SERVER (expected $TAG, got $REMOTE_VERSION)"
+              FAILED=$((FAILED + 1))
+            fi
+          done
+
+          echo ""
+          if [ "$FAILED" -gt 0 ]; then
+            echo "[ERROR] $FAILED server(s) failed to sync. See above for details."
+            exit 1
+          fi
+          echo "[OK] All ${#SERVERS[@]} server(s) synced successfully ($TAG)"

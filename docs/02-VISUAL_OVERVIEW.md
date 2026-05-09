@@ -7,12 +7,13 @@ You: git tag v1.0.0 && git push origin v1.0.0
                   ↓
             GitHub Actions Triggered
                   ↓
-    ┌─────────────┬─────────────┬──────────────┐
-    ↓             ↓             ↓              ↓
-Build         Build          Build         Generate
-Branding      Extensions     Installer     Configs
-(5 min)       (10 min)       (5 min)       (5 min)
-    └─────────────┬─────────────┬──────────────┘
+    ┌─────────────┬─────────────┐
+    ↓             ↓             ↓
+Build         Build          Build
+Branding      Security       TPM Reg
+Extension     Extension      Extension
+(5 min)       (5 min)        (5 min)
+    └─────────────┬─────────────┘
                   ↓
                Build ISO
               (15 min)
@@ -36,10 +37,6 @@ extensions/
   - itl-branding/        ───→  ghcr.io/itlusions/
   - itl-security/            - itl-talos-branding:v1.0.0
                              - itl-talos-security:v1.0.0
-
-build/
-  - Dockerfile.installer ───→  ghcr.io/itlusions/
-  - scripts/                 - itl-talos-installer:v1.0.0
 
 branding/                  GitHub Release v1.0.0
   - templates/      ───→   itl-talos-v1.9.0.iso
@@ -227,19 +224,18 @@ workflow file        ─→ Changes Talos       ─→ Newer
                       ↓
         ┌─────────────┼─────────────┐
         ↓             ↓             ↓
-   BRANDING      SECURITY      INSTALLER
-   Extension     Extension     Image
+   BRANDING      SECURITY      TPM-REGISTER
+   Extension     Extension     Extension
         ↓             ↓             ↓
         └─────────────┼─────────────┘
                       ↓
             ghcr.io/itlusions/
-            ├─ itl-talos-branding:v1.0.0
-            ├─ itl-talos-security:v1.0.0
-            └─ itl-talos-installer:v1.0.0
-
-These are referenced in:
-  controlplane-final.yaml
-  worker-final.yaml
+            ├─ itl-talos-hardened-os-branding:v1.0.0
+            ├─ itl-talos-hardened-os-security:v1.0.0
+            └─ itl-talos-tpm-register:v1.0.0
+                      ↓
+            siderolabs/imager
+            bakes all 3 into ISO
 
 ## One-Minute Summary
 

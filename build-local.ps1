@@ -9,7 +9,6 @@ param(
 $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BrandingDir = Join-Path $ProjectRoot "branding"
-$BuildDir = Join-Path $ProjectRoot "build"
 
 Write-Host "========================================================" -ForegroundColor Cyan
 Write-Host "  ITL Talos HardenedOS - Local Build" -ForegroundColor Cyan
@@ -88,9 +87,9 @@ Authentication: Keycloak
     Write-Host "  [OK] Branding assets complete" -ForegroundColor Green
 }
 
-# Step 2: Build Docker Images
+# Step 2: Build extension images
 Write-Host ""
-Write-Host "[*] Step 2: Building Docker images..." -ForegroundColor Yellow
+Write-Host "[*] Step 2: Building extension images..." -ForegroundColor Yellow
 
 if (-not (Test-Path variable:dockerAvailable)) {
     try {
@@ -103,21 +102,25 @@ if (-not (Test-Path variable:dockerAvailable)) {
     }
 }
 
-# Build installer image
-Write-Host "  [>] Building installer image..." -ForegroundColor Cyan
-docker build `
-    -f "$BuildDir\Dockerfile.installer" `
-    -t "itl-talos-hardened:installer-v1.9.0" `
-    --build-arg TALOS_VERSION=v1.9.0 `
-    --build-arg BUILD_DATE="$(Get-Date -Format o)" `
-    "$ProjectRoot" | Out-Host
+$Extensions = @("itl-branding", "itl-security", "itl-tpm-register")
+foreach ($ext in $Extensions) {
+    $extPath = "$ProjectRoot\extensions\$ext"
+    if (Test-Path $extPath) {
+        Write-Host "  [>] Building $ext extension..." -ForegroundColor Cyan
+        docker build `
+            -t "itl-talos-hardened-os-$ext`:local" `
+            --build-arg TALOS_VERSION=v1.9.0 `
+            "$extPath" | Out-Host
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "  [ERROR] Installer build failed!" -ForegroundColor Red
-    exit 1
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "  [ERROR] Extension $ext build failed!" -ForegroundColor Red
+            exit 1
+        }
+        Write-Host "  [OK] $ext built" -ForegroundColor Green
+    } else {
+        Write-Host "  [SKIP] $ext — directory not found at $extPath" -ForegroundColor Yellow
+    }
 }
-
-Write-Host "  [OK] Installer image built successfully" -ForegroundColor Green
 
 # Step 3: Summary
 Write-Host ""
@@ -125,11 +128,11 @@ Write-Host "========================================================" -Foregroun
 Write-Host "  Build Complete!" -ForegroundColor Green
 Write-Host "========================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Built images:" -ForegroundColor Cyan
-docker images | Select-String "itl-talos" | ForEach-Object { "  $_" }
+Write-Host "Built extension images:" -ForegroundColor Cyan
+docker images | Select-String "itl-talos-hardened-os" | ForEach-Object { "  $_" }
 
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Yellow
 Write-Host "  1. Review the build logs above for any issues" -ForegroundColor White
-Write-Host "  2. Test with: docker run --rm itl-talos-hardened:installer-v1.9.0" -ForegroundColor White
-Write-Host "  3. Push to registry (if needed): docker push <registry>/itl-talos-hardened:installer-v1.9.0" -ForegroundColor White
+Write-Host "  2. Run build-simple.sh (Linux/WSL) to produce a local ISO using siderolabs/imager" -ForegroundColor White
+Write-Host "  3. Push to registry: docker push ghcr.io/<org>/itl-talos-hardened-os-<ext>:<tag>" -ForegroundColor White
