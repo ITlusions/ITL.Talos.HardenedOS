@@ -200,7 +200,7 @@ jobs:
           echo "[*] Generating Kyverno security policies..."
           python scripts/generate-kyverno-patch.py \
             --profile security \
-            --output flavors/controlplane-stack/manifests/10-kyverno-policies.yaml
+            --output config/output/kyverno-policies.yaml
           echo "[OK] Kyverno policies generated"
 
       
@@ -320,9 +320,6 @@ jobs:
             echo "[OK] Netboot assets collected for profile: ${PROFILE}"
           fi
 
-          # Copy iPXE menu
-          cp -v netboot/menu.ipxe build-output/
-
           cat > "build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt" << EOF
           ITL Talos HardenedOS — Build Information
           Version   : ${{ env.TALOS_VERSION }}
@@ -370,8 +367,6 @@ jobs:
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
             build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
-            build-output/menu.ipxe
-            build-output/netboot/**/*
             build-output/controlplane-final.yaml
             build-output/worker-final.yaml
           body: |
@@ -390,9 +385,6 @@ jobs:
             |------|-------------|
             | `itl-talos-${{ env.TALOS_VERSION }}.iso` | Bootable ISO (metal-amd64) |
             | `.sha256` / `.md5` | Checksums |
-            | `menu.ipxe` | iPXE network boot menu |
-            | `netboot/<profile>/vmlinuz` | Kernel for netboot |
-            | `netboot/<profile>/initramfs.xz` | Initramfs for netboot |
             | `controlplane-final.yaml` | Talos control plane machine config |
             | `worker-final.yaml` | Talos worker machine config |
 
