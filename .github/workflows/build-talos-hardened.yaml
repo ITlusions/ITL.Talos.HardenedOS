@@ -5,6 +5,19 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Build profile (standard | gpu | storage | proxmox)'
+        required: false
+        default: 'standard'
+      extra_extensions:
+        description: 'Extra OCI extension refs to bake in (space-separated)'
+        required: false
+        default: ''
+      talos_version:
+        description: 'Talos version override (e.g. v1.9.0)'
+        required: false
+        default: ''
 
 env:
   REGISTRY: ghcr.io
@@ -280,22 +293,38 @@ jobs:
           TALOS_VERSION: ${{ env.TALOS_VERSION }}
           ITL_BRANDING_TAG: ${{ env.EXT_TAG }}
           ITL_SECURITY_TAG: ${{ env.EXT_TAG }}
-          # Optional: set EXTRA_EXTENSIONS to bake in additional GHCR extensions
-          # EXTRA_EXTENSIONS: "ghcr.io/siderolabs/hello-world:v1.0.0"
+          PROFILE: ${{ github.event.inputs.profile || 'standard' }}
+          EXTRA_EXTENSIONS: ${{ github.event.inputs.extra_extensions || '' }}
+          EXTRACT_NETBOOT: "true"
         run: |
           chmod +x ./build-simple.sh
           ./build-simple.sh
 
       - name: Collect build output
         run: |
+          PROFILE="${{ github.event.inputs.profile || 'standard' }}"
           mkdir -p build-output
+
           cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso"        build-output/
           cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso.sha256" build-output/
           cp -v "itl-talos-${{ env.TALOS_VERSION }}.iso.md5"    build-output/
 
+          # Copy netboot assets if present
+          NETBOOT_SRC="netboot-assets/${PROFILE}"
+          if [ -d "$NETBOOT_SRC" ]; then
+            mkdir -p "build-output/netboot/${PROFILE}"
+            cp -v "$NETBOOT_SRC/vmlinuz"      "build-output/netboot/${PROFILE}/"
+            cp -v "$NETBOOT_SRC/initramfs.xz" "build-output/netboot/${PROFILE}/"
+            echo "[OK] Netboot assets collected for profile: ${PROFILE}"
+          fi
+
+          # Copy iPXE menu
+          cp -v netboot/menu.ipxe build-output/
+
           cat > "build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt" << EOF
           ITL Talos HardenedOS — Build Information
           Version   : ${{ env.TALOS_VERSION }}
+          Profile   : ${PROFILE}
           Build Date: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
           Commit    : ${{ github.sha }}
           Tag       : ${{ github.ref_name }}
@@ -305,18 +334,31 @@ jobs:
             ghcr.io/itlusions/itl-talos-hardened-os-security:${{ env.EXT_TAG }}
             ghcr.io/siderolabs/gvisor (pinned tag)
             ghcr.io/siderolabs/intel-ucode (pinned tag)
+          ${{ github.event.inputs.extra_extensions && format('  Extra: {0}', github.event.inputs.extra_extensions) || '' }}
 
           NOTE: machine.install.extensions is not required for the above.
                 Use it only for additional cluster-specific extensions.
           EOF
-      
+
+      - name: Download Talos configuration artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: talos-configs
+          path: build-output/configs/
+
+      - name: Include configs in build output
+        run: |
+          cp -v build-output/configs/controlplane-final.yaml build-output/ || echo "[!] controlplane-final.yaml not found in artifact"
+          cp -v build-output/configs/worker-final.yaml build-output/ || echo "[!] worker-final.yaml not found in artifact"
+          echo "[OK] Talos configs included in build output"
+
       - name: Upload ISO artifact
         uses: actions/upload-artifact@v4
         with:
           name: bootable-iso
           path: build-output/
           retention-days: 30
-      
+
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
@@ -326,6 +368,10 @@ jobs:
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.sha256
             build-output/itl-talos-${{ env.TALOS_VERSION }}.iso.md5
             build-output/itl-talos-${{ env.TALOS_VERSION }}-info.txt
+            build-output/menu.ipxe
+            build-output/netboot/**/*
+            build-output/controlplane-final.yaml
+            build-output/worker-final.yaml
           body: |
             # ITL Talos HardenedOS ${{ github.ref_name }}
 
@@ -341,8 +387,12 @@ jobs:
             | File | Description |
             |------|-------------|
             | `itl-talos-${{ env.TALOS_VERSION }}.iso` | Bootable ISO (metal-amd64) |
-            | `.sha256` | SHA256 checksum |
-            | `.md5` | MD5 checksum |
+            | `.sha256` / `.md5` | Checksums |
+            | `menu.ipxe` | iPXE network boot menu |
+            | `netboot/<profile>/vmlinuz` | Kernel for netboot |
+            | `netboot/<profile>/initramfs.xz` | Initramfs for netboot |
+            | `controlplane-final.yaml` | Talos control plane machine config |
+            | `worker-final.yaml` | Talos worker machine config |
 
             ## Quick Start
             ```bash
