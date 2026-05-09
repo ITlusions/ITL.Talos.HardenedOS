@@ -15,8 +15,8 @@ param(
     [string]$ITLBrandingTag   = "latest",
     [string]$ITLSecurityTag   = "latest",
     # Check https://github.com/siderolabs/extensions for compatible tags per Talos version
-    [string]$GvisorTag        = "v20231214.0-v1.9.0",
-    [string]$IntelUcodeTag    = "20240312-v1.9.0",
+    [string]$GvisorTag        = "20260427.0",
+    [string]$IntelUcodeTag    = "20260227",
     # Optional: additional OCI image refs to bake in on top of the core set
     # e.g.: @("ghcr.io/siderolabs/hello-world:v1.0.0", "ghcr.io/myorg/myext:latest")
     [string[]]$ExtraExtensions = @()

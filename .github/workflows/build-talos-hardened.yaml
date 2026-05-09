@@ -24,6 +24,8 @@ env:
   IMAGE_NAME: itlusions/itl-talos-hardened-os
   TALOS_VERSION: v1.9.0
   PKGS_VERSION: release-1.9
+  GVISOR_TAG: 20260427.0
+  INTEL_UCODE_TAG: 20260227
   BUILD_CUSTOM_KERNEL: false
 
 jobs:

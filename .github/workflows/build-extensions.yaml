@@ -61,6 +61,8 @@ env:
   REGISTRY: ghcr.io
   IMAGE_ORG: itlusions
   TALOS_VERSION: v1.9.0
+  GVISOR_TAG: 20260427.0
+  INTEL_UCODE_TAG: 20260227
 
 jobs:
   build-extensions:
