@@ -13,16 +13,20 @@ Phase 1 — USB Registration (Alpine Linux, before Talos)
 ─────────────────────────────────────────────────────────
 USB agent boots on target hardware
   └─ Reads TPM EK + hardware identity (UUID, MAC, serial, product)
+  └─ Generates TPM wrapping key (RSA-2048 OAEP, hardware-bound)
   └─ POST /api/v1/register → receives role ISO URL + one-time config token
-  └─ Downloads role ISO → dd to target disk
-  └─ Writes receipt to EFI partition → reboots
+  └─ POST /api/v1/machines/{id}/request-cert → enrollment cert (Layer 1 encrypted)
+  └─ TPM-seals enrollment key on EFI partition (Layer 2)
+  └─ Downloads role ISO → dd to target disk → reboots
 
 
 Phase 2 — Talos Attestation (runs once inside Talos, idempotent)
 ─────────────────────────────────────────────────────────────────
 itl-tpm-register extension runs on first boot
-  ├─ Path A (offline):  enrollment cert + key present
-  │    └─ Signs nonce → POST /api/v1/machines/enroll → key deleted
+  ├─ Path A (cert enrollment):  sealed enrollment key detected
+  │    └─ Unseal AES key via TPM → decrypt enrollment.key.enc → /run (tmpfs)
+  │    └─ tpm-cert-check.sh validates cert chain + URI SAN + key match
+  │    └─ Signs nonce → POST /api/v1/machines/enroll → key deleted from /run
   └─ Path B (standard): generates PCR quote (PCRs 0-7)
        └─ POST /api/v1/attest → machine marked attested
 ```
@@ -126,14 +130,43 @@ Sends all collected data. On success receives:
 - `config_token` — one-time token Talos will use to fetch its config
 - `config_url` — full URL: `{reg_url}/api/v1/config/{token}`
 
-**Step 5 — ISO download and verification**
+**Step 4.5 — Generate TPM wrapping key (Layer 1 transport protection)**
+
+Before requesting the enrollment certificate, the USB agent generates a TPM-resident unrestricted RSA-2048 OAEP-SHA256 decrypt key:
+
+```bash
+tpm2_createprimary -C o -G rsa -c $srk_ctx
+tpm2_create -C $srk_ctx -G rsa2048:oaep:sha256 \
+    -a "decrypt|fixedtpm|fixedparent|noda" \
+    -u $pub -r $priv
+tpm2_load -C $srk_ctx -u $pub -r $priv -c $wrap_ctx
+tpm2_readpublic -c $wrap_ctx --format pem
+```
+
+The public key PEM is sent in the `wrapping_key_pem` field of `POST /request-cert`. The private half is hardware-bound (`fixedtpm|fixedparent`) — it cannot leave the TPM chip. If TPM key creation fails, the agent falls back to TLS-only protection.
+
+**Step 5 — Request enrollment certificate** (`POST /api/v1/machines/{id}/request-cert`)
+
+The Registration Service:
+1. Re-verifies the EK material (same as `POST /register`)
+2. Issues an RSA-2048 enrollment cert (valid 30 days) with URI SAN `urn:itl:ek:<fingerprint>`, `keyEncipherment`, `SubjectKeyIdentifier`, `AuthorityKeyIdentifier`
+3. Encrypts the enrollment private key with the wrapping public key (RSA-OAEP-SHA256)
+
+The USB agent:
+1. Decrypts the enrollment key with `tpm2_rsadecrypt` — key recovered in-memory only
+2. Generates a 32-byte random AES key (`openssl rand 32`)
+3. AES-256-CBC encrypts the enrollment key: `openssl enc -aes-256-cbc -pbkdf2`
+4. Seals the AES key in the TPM Storage hierarchy (`tpm2_create -i $aes_key -a "fixedtpm|fixedparent|noda"`)
+5. Destroys the AES key from disk immediately
+
+**Step 6 — ISO download and verification**
 
 ```bash
 curl -L <iso_url> -o /tmp/talos.iso
 # If <iso_url>.sha256 exists, verifies SHA-256 before continuing
 ```
 
-**Step 6 — Write to disk**
+**Step 7 — Write to disk**
 
 ```bash
 dd if=/tmp/talos.iso of=<target_disk> bs=4M
@@ -142,24 +175,24 @@ sync
 
 Target disk is auto-detected (first non-USB block device) or set via `ITL_TARGET_DISK`.
 
-**Step 7 — EFI receipt**
+**Step 8 — EFI receipt**
 
-Written to the EFI FAT partition at `/itl/registration.json`:
+Written to the EFI FAT partition at `/itl/`. The enrollment key is **never** written in plaintext:
 
-```json
-{
-  "machine_id":   "<UUID>",
-  "ek_fingerprint": "<64-char hex>",
-  "role":         "worker-app",
-  "config_token": "<token>",
-  "reg_url":      "https://reg.your-domain.com",
-  "registered_at": "2026-05-09T10:00:00Z"
-}
+```
+/itl/registration.json      — machine identity, config token, reg_url
+/itl/enrollment.crt         — X.509 enrollment certificate (PEM)
+/itl/enrollment.key.enc     — AES-256-CBC ciphertext of enrollment private key
+/itl/enrollment.seal.pub    — TPM seal object public area
+/itl/enrollment.seal.priv   — TPM seal object private area
+/itl/enrollment-ca.crt      — Enrollment CA certificate (PEM)
 ```
 
-This receipt is the handover record between Phase 1 and Phase 2.
+`enrollment.key` is intentionally absent when Layer 2 sealing succeeds. `tpm-attest.sh` detects the presence of `enrollment.seal.pub/priv` and `enrollment.key.enc` as the trigger to unseal via TPM before use.
 
-**Step 8 — Reboot into Talos**
+Fallback: if TPM is unavailable or sealing fails, `enrollment.key` is written in plaintext and the seal files are absent. TLS remains the only transport protection in this case.
+
+**Step 9 — Reboot into Talos**
 
 Talos boots from the written ISO. On first boot it reads `talos.config=<config_url>` from the kernel cmdline, fetches the MachineConfig (one-time — token consumed), applies it, and reboots.
 
@@ -183,9 +216,54 @@ Set `ITL_AUTO_CONFIRM=yes` or kernel arg `itl.auto_confirm=yes` to skip this.
 
 The `itl-tpm-register` extension runs as a Talos service on every boot. It is idempotent: if `/var/lib/itl-tpm/attested` exists the service exits 0 immediately.
 
+### Path A — Certificate enrollment (ZTP-provisioned nodes)
+
+This path runs when the USB agent wrote sealed enrollment key files to the EFI partition during Phase 1.
+
+**Step 1** — Re-reads TPM EK and hardware identity.
+
+**Step 2** — Unseal enrollment key (`unseal_enrollment_key`)
+
+Detects `enrollment.seal.pub`, `enrollment.seal.priv`, and `enrollment.key.enc` in `STATE_DIR`:
+
+```bash
+# Recreate Storage-hierarchy SRK (deterministic on this TPM — no owner password)
+tpm2_createprimary -C o -G rsa -c $srk_ctx
+# Load the seal object
+tpm2_load -C $srk_ctx -u enrollment.seal.pub -r enrollment.seal.priv -c $seal_ctx
+# Unseal the AES key
+tpm2_unseal -c $seal_ctx -o $aes_key
+# Decrypt enrollment key into /run (tmpfs)
+openssl enc -d -aes-256-cbc -pbkdf2 -in enrollment.key.enc -pass file:$aes_key -out /run/itl-enroll.key
+```
+
+If no seal files are present (`enrollment.key` exists instead), this step is skipped and the plaintext path is used. If unsealing fails, cert enrollment is skipped and the node falls through to Path B.
+
+**Step 3** — `tpm-cert-check.sh` validates the enrollment cert:
+1. Chain: `openssl verify -CAfile enrollment-ca.crt enrollment.crt`
+2. Expiry: cert not-after > now
+3. Key match: cert public key matches private key modulus
+4. EKU: `clientAuth` present (warning only)
+5. URI SAN: `urn:itl:ek:<fingerprint>` matches current TPM EK fingerprint
+
+If any check fails (except EKU warning), enrollment is aborted.
+
+**Step 4** — Sign a nonce with the enrollment key and `POST /api/v1/machines/enroll`:
+
+```bash
+nonce=$(openssl rand -hex 32)
+sig=$(printf '%s' "$nonce" | openssl dgst -sha256 -sign /run/itl-enroll.key -binary | base64 -w0)
+```
+
+**Step 5** — On `status=attested`:
+- Writes `/var/lib/itl-tpm/attested`
+- Deletes `/run/itl-enroll.key` (tmpfs, but explicit cleanup)
+- Deletes `enrollment.key.enc`, `enrollment.seal.pub`, `enrollment.seal.priv` from `STATE_DIR`
+- Exits 0
+
 ### Path B — Standard (PCR quote)
 
-This is the default path for online-provisioned nodes.
+This is the default path for online-provisioned nodes that did not receive an enrollment cert, or when Path A fails.
 
 **Step 1** — Re-reads TPM EK and hardware identity (same logic as Phase 1).
 

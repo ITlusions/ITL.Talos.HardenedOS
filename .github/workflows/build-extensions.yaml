@@ -56,6 +56,9 @@ on:
       talos_version:
         description: 'The resolved Talos version'
         value: ${{ jobs.build-extensions.outputs.talos_version }}
+      installer_image:
+        description: 'Pre-baked installer OCI image (all ITL extensions merged into Talos base)'
+        value: ${{ jobs.build-extensions.outputs.installer_image }}
 
 env:
   REGISTRY: ghcr.io
@@ -73,8 +76,9 @@ jobs:
       packages: write
 
     outputs:
-      image_tag:     ${{ steps.resolve.outputs.image_tag }}
-      talos_version: ${{ steps.resolve.outputs.talos_version }}
+      image_tag:       ${{ steps.resolve.outputs.image_tag }}
+      talos_version:   ${{ steps.resolve.outputs.talos_version }}
+      installer_image: ${{ steps.build-installer.outputs.installer_image }}
 
     steps:
       - name: Checkout
@@ -162,6 +166,46 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # ── Installer image ──────────────────────────────────────────────────────
+      # Builds a single OCI installer image with all ITL extensions pre-merged.
+      # Consumers (ITL.Talos.Flavors) reference this via --base-installer-image
+      # so they never need to enumerate individual extension refs at ISO build time.
+      - name: Build and push installer image
+        id: build-installer
+        run: |
+          TALOS_VER="${{ steps.resolve.outputs.talos_version }}"
+          IMG_TAG="${{ steps.resolve.outputs.image_tag }}"
+          INSTALLER_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-installer:${IMG_TAG}"
+          mkdir -p /tmp/installer-out
+
+          docker run --rm \
+            --privileged \
+            -v /dev:/dev \
+            -v /tmp/installer-out:/out \
+            -v "$HOME/.docker/config.json:/run/containers/auth.json:ro" \
+            -e "REGISTRY_AUTH_FILE=/run/containers/auth.json" \
+            ghcr.io/siderolabs/imager:${TALOS_VER} \
+            installer \
+            --arch amd64 \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-branding:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security:${IMG_TAG} \
+            --system-extension-image ${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register:${IMG_TAG} \
+            --system-extension-image ghcr.io/siderolabs/gvisor:${{ env.GVISOR_TAG }} \
+            --system-extension-image ghcr.io/siderolabs/intel-ucode:${{ env.INTEL_UCODE_TAG }}
+
+          # Install crane to push the OCI tarball to GHCR
+          CRANE_VER=$(curl -sL https://api.github.com/repos/google/go-containerregistry/releases/latest \
+            | grep '"tag_name"' | sed 's/.*"\(v[^"]*\)".*/\1/')
+          curl -sL "https://github.com/google/go-containerregistry/releases/download/${CRANE_VER}/go-containerregistry_Linux_x86_64.tar.gz" \
+            | sudo tar -xz -C /usr/local/bin crane
+
+          crane auth login ${{ env.REGISTRY }} -u ${{ github.actor }} -p ${{ secrets.GITHUB_TOKEN }}
+          crane push /tmp/installer-out/installer-amd64.tar "${INSTALLER_IMAGE}"
+          crane tag "${INSTALLER_IMAGE}" latest
+
+          echo "installer_image=${INSTALLER_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "[OK] Installer image: ${INSTALLER_IMAGE}"
+
       # ── Summary ─────────────────────────────────────────────────────────────
       - name: Summary
         run: |
@@ -172,3 +216,4 @@ jobs:
           echo "| \`${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-branding\` | \`${{ steps.resolve.outputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| \`${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-hardened-os-security\` | \`${{ steps.resolve.outputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
           echo "| \`${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-tpm-register\` | \`${{ steps.resolve.outputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/itl-talos-installer\` | \`${{ steps.resolve.outputs.image_tag }}\` |" >> "$GITHUB_STEP_SUMMARY"

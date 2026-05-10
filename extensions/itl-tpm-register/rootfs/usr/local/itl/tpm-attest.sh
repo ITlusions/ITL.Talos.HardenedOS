@@ -52,9 +52,96 @@ EK_B64=$(base64 -w0 < "$EK_CERT_PEM")
 # This avoids the manual `POST /api/v1/machines/import` step.
 ENROLL_CERT="${STATE_DIR}/enrollment.crt"
 ENROLL_KEY="${STATE_DIR}/enrollment.key"
+ENROLL_CA="${STATE_DIR}/enrollment-ca.crt"
+ENROLL_KEY_TMPFS=0   # set to 1 when key was decrypted into /run (must delete after use)
+
+# ── Unseal TPM-sealed enrollment key (Layer 2) ───────────────────────────────
+# If the USB agent used seal_enrollment_key(), enrollment.key is absent and
+# enrollment.key.enc + enrollment.seal.pub + enrollment.seal.priv are present
+# instead.  Recreate the same Storage-hierarchy SRK (deterministic on this TPM),
+# load and unseal the AES key, then AES-decrypt the key into /run (tmpfs).
+# Sets ENROLL_KEY to the decrypted path and ENROLL_KEY_TMPFS=1.
+# Silently returns if no sealed files are present (plain .key path is used).
+unseal_enrollment_key() {
+    local seal_pub="${STATE_DIR}/enrollment.seal.pub"
+    local seal_priv="${STATE_DIR}/enrollment.seal.priv"
+    local key_enc="${STATE_DIR}/enrollment.key.enc"
+
+    [ -f "$seal_pub" ] && [ -f "$seal_priv" ] && [ -f "$key_enc" ] || return 0
+
+    log "Sealed enrollment key detected — unsealing via TPM (Layer 2)..."
+
+    local srk_ctx seal_ctx aes_key decrypted
+    srk_ctx=$(mktemp)
+    seal_ctx=$(mktemp)
+    aes_key=$(mktemp)
+    decrypted="/run/itl-enroll.key"   # /run is tmpfs on Talos
+
+    set +e
+    tpm2_createprimary -C o -G rsa -c "$srk_ctx" 2>/dev/null ; local rc_srk=$?
+    tpm2_load -C "$srk_ctx" -u "$seal_pub" -r "$seal_priv" -c "$seal_ctx" 2>/dev/null ; local rc_load=$?
+    tpm2_unseal -c "$seal_ctx" -o "$aes_key" 2>/dev/null ; local rc_unseal=$?
+    set -e
+
+    rm -f "$srk_ctx" "$seal_ctx"
+
+    if [ "$rc_srk" -ne 0 ] || [ "$rc_load" -ne 0 ] || [ "$rc_unseal" -ne 0 ]; then
+        log "ERROR: TPM unseal failed (srk=$rc_srk load=$rc_load unseal=$rc_unseal)"
+        log "ERROR: Cannot recover enrollment key — skipping cert-based enrollment"
+        rm -f "$aes_key"
+        # Signal to caller that the sealed path is broken
+        ENROLL_CERT=""
+        return 0
+    fi
+
+    set +e
+    openssl enc -d -aes-256-cbc -pbkdf2 \
+        -in  "$key_enc" \
+        -out "$decrypted" \
+        -pass file:"$aes_key" 2>/dev/null
+    local rc_dec=$?
+    set -e
+
+    rm -f "$aes_key"
+
+    if [ "$rc_dec" -ne 0 ]; then
+        log "ERROR: AES-256-CBC decrypt of enrollment key failed"
+        log "ERROR: Skipping cert-based enrollment"
+        rm -f "$decrypted"
+        ENROLL_CERT=""
+        return 0
+    fi
+
+    ENROLL_KEY="$decrypted"
+    ENROLL_KEY_TMPFS=1
+    log "Enrollment key unsealed and decrypted to /run (tmpfs)"
+}
+
+# Resolve sealed key first so ENROLL_KEY points to the right path before cert check.
+# When Layer 2 sealing was used by the USB agent, enrollment.key is absent and
+# enrollment.key.enc + seal.pub + seal.priv are present instead.
+unseal_enrollment_key
 
 if [ -f "$ENROLL_CERT" ] && [ -f "$ENROLL_KEY" ]; then
-    log "Enrollment cert found — attempting certificate-based enrollment"
+    log "Enrollment cert found — validating before use"
+    # Verify the cert was issued by the ITL Enrollment CA, is not expired,
+    # and the private key matches the cert before sending anything to the network.
+    if [ ! -f "$ENROLL_CA" ]; then
+        log "ERROR: Enrollment CA cert not found at $ENROLL_CA — cannot verify enrollment cert"
+        log "ERROR: Skipping certificate enrollment (tampered or incomplete bundle?)"
+        ENROLL_CERT=""
+    else
+        "${SCRIPT_DIR}/tpm-cert-check.sh" \
+            "$ENROLL_CERT" "$ENROLL_KEY" "$ENROLL_CA" "$EK_FP" || {
+                log "ERROR: Enrollment cert validation failed — skipping certificate enrollment"
+                log "ERROR: The cert may be expired, tampered, or not issued by the ITL Enrollment CA"
+                ENROLL_CERT=""
+            }
+    fi
+fi
+
+if [ -f "$ENROLL_CERT" ] && [ -f "$ENROLL_KEY" ]; then
+    log "Enrollment cert validated — attempting certificate-based enrollment"
 
     # Generate a nonce and sign it with the enrollment private key to prove
     # key possession (prevents replay from an attacker with only the cert PEM)
@@ -92,9 +179,16 @@ if [ -f "$ENROLL_CERT" ] && [ -f "$ENROLL_KEY" ]; then
                 log "Certificate enrollment successful — machine_id=${MACHINE_ID}"
                 echo "${MACHINE_ID}" > "$ATTESTED_FLAG"
                 echo "$ENROLL_RESPONSE" > "${STATE_DIR}/attestation_receipt.json"
-                # Remove the private key — it is no longer needed and should not
-                # persist on disk after successful enrollment
+                # Delete the private key — no longer needed after enrollment.
+                # When Layer 2 was used, ENROLL_KEY points to /run (tmpfs); also
+                # clean the seal objects from STATE_DIR so they cannot be replayed.
                 rm -f "$ENROLL_KEY"
+                if [ "$ENROLL_KEY_TMPFS" = "1" ]; then
+                    rm -f "${STATE_DIR}/enrollment.key.enc" \
+                          "${STATE_DIR}/enrollment.seal.pub" \
+                          "${STATE_DIR}/enrollment.seal.priv"
+                    log "Sealed key objects deleted from STATE_DIR"
+                fi
                 log "Enrollment key deleted; cert retained for reference"
                 exit 0
             fi
@@ -156,13 +250,82 @@ RESPONSE=$(/usr/local/bin/curl \
 
 # ── Step 6: parse response and persist receipt ───────────────────────────────
 STATUS=$(/usr/local/bin/jq -r '.status' <<< "$RESPONSE" 2>/dev/null || echo "unknown")
+ACTION=$(/usr/local/bin/jq -r '.action // "none"' <<< "$RESPONSE" 2>/dev/null || echo "none")
 MACHINE_ID=$(/usr/local/bin/jq -r '.machine_id' <<< "$RESPONSE" 2>/dev/null || echo "")
 HOSTNAME=$(/usr/local/bin/jq -r '.hostname // empty' <<< "$RESPONSE" 2>/dev/null || echo "")
+
+# ── Operator-triggered lock ───────────────────────────────────────────────────
+# action=lock means the operator called POST /lock on this machine.
+# The node writes a lock flag so other extensions/scripts can detect the state.
+# Boot continues normally (non-fatal) but enrollment/cert renewal will not complete.
+# When the operator calls POST /unlock, the next boot contact restores normal flow.
+if [ "$ACTION" = "lock" ] || [ "$STATUS" = "locked" ]; then
+    log "WARN: Machine ${MACHINE_ID} is LOCKED by operator — enrollment suspended"
+    log "WARN: Node will continue running but cannot renew certs until unlocked"
+    echo "locked:${MACHINE_ID}" > "${STATE_DIR}/locked"
+    exit 0
+fi
+
+# ── Operator-triggered wipe / revocation ─────────────────────────────────────
+# The Registration Service sets action=wipe when an operator has called
+# POST /api/v1/machines/{id}/revoke?wipe=true.
+# We wipe STATE + EPHEMERAL via the Talos machine API and reboot.
+# The node comes up in maintenance mode (no Talos config, no cluster membership).
+# After a wipe the operator can re-provision with a new USB agent run.
+if [ "$ACTION" = "wipe" ]; then
+    log "SECURITY: Operator-initiated wipe received for machine_id=${MACHINE_ID}"
+    log "SECURITY: Wiping STATE and EPHEMERAL partitions — node will reboot into maintenance mode"
+    echo "revoked_wipe:${MACHINE_ID}" > "${STATE_DIR}/revoked"
+
+    # Primary: talosctl reset via the local machine API socket (available on Talos metal mode)
+    if command -v talosctl >/dev/null 2>&1; then
+        talosctl reset \
+            --graceful=false \
+            --reboot \
+            --insecure \
+            --nodes 127.0.0.1 \
+            2>/dev/null && exit 0
+    fi
+
+    # Fallback: wipe known partition labels directly and force reboot.
+    # Talos STATE and EPHEMERAL are on the same disk as the boot partition.
+    # Determine the disk from the block device backing /var/lib/itl-tpm (STATE mount).
+    DISK=""
+    for d in /dev/sda /dev/vda /dev/nvme0n1 /dev/xvda; do
+        [ -b "$d" ] && DISK="$d" && break
+    done
+    if [ -n "$DISK" ]; then
+        log "SECURITY: Fallback wipe of ${DISK} STATE/EPHEMERAL partitions"
+        # Zero the first 4 MB of each known Talos partition label
+        for label in STATE EPHEMERAL; do
+            PART=$(blkid -L "$label" 2>/dev/null || true)
+            if [ -n "$PART" ]; then
+                log "SECURITY: Zeroing partition ${PART} (label=${label})"
+                dd if=/dev/zero of="$PART" bs=1M count=4 2>/dev/null || true
+            fi
+        done
+    fi
+
+    sync
+    log "SECURITY: Wipe complete — rebooting"
+    reboot -f
+    exit 0
+fi
+
+# ── status=revoked without wipe ───────────────────────────────────────────────
+if [ "$STATUS" = "revoked" ]; then
+    log "WARN: Machine ${MACHINE_ID} has been revoked by operator (no wipe requested)"
+    log "WARN: Node will continue running but cannot re-attest — contact operator"
+    echo "revoked:${MACHINE_ID}" > "${STATE_DIR}/revoked"
+    exit 0
+fi
 
 if [ "$STATUS" = "attested" ] || [ "$STATUS" = "already_attested" ]; then
     log "Attestation successful — machine_id=${MACHINE_ID} hostname=${HOSTNAME}"
     echo "${MACHINE_ID}" > "$ATTESTED_FLAG"
     echo "$RESPONSE"     > "${STATE_DIR}/attestation_receipt.json"
+    # Clear any stale lock flag — operator may have unlocked this machine
+    rm -f "${STATE_DIR}/locked"
     log "Attestation receipt saved to ${STATE_DIR}/attestation_receipt.json"
 elif [ "$STATUS" = "pending_approval" ]; then
     log "Attestation pending operator approval — machine_id=${MACHINE_ID}"

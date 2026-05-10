@@ -63,6 +63,11 @@ Issued machine enrollment certificates are:
 - Valid for `ITL_ENROLLMENT_CERT_DAYS` days (default: 30)
 - Subject: `CN=<machine_id>, OU=<role>, O=ITL Usions, C=NL`
 - EKU: `clientAuth`
+- `keyEncipherment` key usage (signals the key can wrap/encrypt material)
+- `SubjectKeyIdentifier` and `AuthorityKeyIdentifier` extensions (for OCSP/CRL readiness)
+- URI SAN: `urn:itl:ek:<ek_fingerprint>` — binds the cert to the specific TPM EK
+
+The URI SAN is verified by `tpm-cert-check.sh` on the Talos node before the cert is presented to the Registration Service. This prevents a stolen cert from being used on a machine with a different TPM.
 
 ---
 
@@ -158,26 +163,39 @@ The `itl-tpm-register` extension runs and detects `/var/lib/itl-tpm/enrollment.c
 **Certificate-based enrollment (Path A):**
 
 ```
-1. Generate nonce: openssl rand -hex 32
-2. Sign nonce with enrollment private key: openssl dgst -sha256 -sign enrollment.key
-3. POST /api/v1/machines/enroll:
+1. Detect sealed key files on EFI partition:
+   - enrollment.key.enc  present → Layer 2 (TPM-sealed) path
+   - enrollment.key      present → plaintext path (fallback)
+
+Layer 2 unseal:
+2. tpm2_createprimary -C o -G rsa  (recreate SRK, deterministic on this TPM)
+3. tpm2_load + tpm2_unseal         (recover AES key into memory)
+4. openssl enc -d -aes-256-cbc     (decrypt enrollment key into /run/itl-enroll.key)
+
+Then (both paths):
+5. tpm-cert-check.sh: chain verify, expiry, key match, URI SAN ↔ TPM EK
+6. Generate nonce: openssl rand -hex 32
+7. Sign nonce with enrollment private key: openssl dgst -sha256 -sign <key>
+8. POST /api/v1/machines/enroll:
    {
      "cert_pem":        "<PEM>",
      "nonce":           "<hex>",
      "nonce_signature": "<base64>"
    }
-4. Registration Service:
+9. Registration Service:
    a. Verifies cert chain against Enrollment CA
    b. Verifies RSA-SHA256 signature of nonce against cert public key
    c. Extracts machine_id and role from cert CN/OU
-   d. Sets machine status = attested
-5. On success:
+   d. Verifies URI SAN matches registered EK fingerprint
+   e. Sets machine status = attested
+10. On success:
    - Writes /var/lib/itl-tpm/attested
-   - Deletes /var/lib/itl-tpm/enrollment.key  ← key destroyed
+   - Deletes /run/itl-enroll.key              ← key destroyed from tmpfs
+   - Deletes enrollment.key.enc + seal files  ← sealed objects destroyed
    - Writes attestation receipt
 ```
 
-The private key is deleted from disk on the node after the first successful enrollment. It cannot be recovered.
+The private key (in `/run` tmpfs) and all sealed key material on disk are destroyed on the node after the first successful enrollment. They cannot be recovered.
 
 > The node must be able to reach the Registration Service **once** to complete enrollment. For fully offline nodes with no return network path, see the note below.
 
