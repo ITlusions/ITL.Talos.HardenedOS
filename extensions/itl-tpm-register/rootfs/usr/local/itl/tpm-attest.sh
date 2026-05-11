@@ -253,6 +253,7 @@ STATUS=$(/usr/local/bin/jq -r '.status' <<< "$RESPONSE" 2>/dev/null || echo "unk
 ACTION=$(/usr/local/bin/jq -r '.action // "none"' <<< "$RESPONSE" 2>/dev/null || echo "none")
 MACHINE_ID=$(/usr/local/bin/jq -r '.machine_id' <<< "$RESPONSE" 2>/dev/null || echo "")
 HOSTNAME=$(/usr/local/bin/jq -r '.hostname // empty' <<< "$RESPONSE" 2>/dev/null || echo "")
+CONFIG_URL=$(/usr/local/bin/jq -r '.config_url // empty' <<< "$RESPONSE" 2>/dev/null || echo "")
 
 # ── Operator-triggered lock ───────────────────────────────────────────────────
 # action=lock means the operator called POST /lock on this machine.
@@ -324,13 +325,109 @@ if [ "$STATUS" = "attested" ] || [ "$STATUS" = "already_attested" ]; then
     log "Attestation successful — machine_id=${MACHINE_ID} hostname=${HOSTNAME}"
     echo "${MACHINE_ID}" > "$ATTESTED_FLAG"
     echo "$RESPONSE"     > "${STATE_DIR}/attestation_receipt.json"
-    # Clear any stale lock flag — operator may have unlocked this machine
-    rm -f "${STATE_DIR}/locked"
+    # Clear any stale lock/pending flags — operator may have unlocked or approved
+    rm -f "${STATE_DIR}/locked" "${STATE_DIR}/pending_approval"
     log "Attestation receipt saved to ${STATE_DIR}/attestation_receipt.json"
+
+    # action=apply-config means the machine just attested for the first time
+    # via the no-USB path (itl-tpm-register extension auto-registration).
+    # Fetch the one-time config_url and apply the full MachineConfig so Talos
+    # reboots into the cluster without requiring a USB pre-staging step.
+    if [ "$ACTION" = "apply-config" ] && [ -n "$CONFIG_URL" ]; then
+        log "Applying machine config from Registration Service (action=apply-config)"
+        log "Config URL: ${CONFIG_URL}"
+        TALOS_CFG=$(mktemp)
+        if /usr/local/bin/curl \
+                --silent \
+                --fail \
+                --max-time 30 \
+                --retry 3 \
+                --retry-delay 5 \
+                -o "$TALOS_CFG" \
+                "$CONFIG_URL"; then
+            log "Config downloaded ($(wc -c < "$TALOS_CFG") bytes) — applying via talosctl"
+            if talosctl apply-config \
+                    --insecure \
+                    --nodes 127.0.0.1 \
+                    --file "$TALOS_CFG" \
+                    2>/dev/null; then
+                log "MachineConfig applied — Talos will reboot into the cluster"
+                rm -f "$TALOS_CFG"
+                exit 0
+            else
+                log "ERROR: talosctl apply-config failed — config saved to ${STATE_DIR}/pending.config"
+                cp "$TALOS_CFG" "${STATE_DIR}/pending.config"
+            fi
+        else
+            log "ERROR: Failed to download config from ${CONFIG_URL} — will retry on next boot"
+        fi
+        rm -f "$TALOS_CFG"
+    fi
 elif [ "$STATUS" = "pending_approval" ]; then
     log "Attestation pending operator approval — machine_id=${MACHINE_ID}"
     echo "pending:${MACHINE_ID}" > "${STATE_DIR}/pending_approval"
-    # Exit 0 — don't block boot; operator approves via Registration Service UI
+
+    # Poll the Registration Service every 60 s until the operator approves.
+    # Max 60 attempts (60 min) — after that the next Talos boot will retry.
+    # This avoids requiring a manual reboot after operator approval.
+    POLL_MAX=60
+    POLL_N=0
+    log "Polling for operator approval (max ${POLL_MAX} attempts × 60 s)..."
+    while [ "$POLL_N" -lt "$POLL_MAX" ]; do
+        sleep 60
+        POLL_N=$((POLL_N + 1))
+        log "Poll attempt ${POLL_N}/${POLL_MAX} — checking Registration Service"
+
+        POLL_RESP=$(/usr/local/bin/curl \
+            --silent \
+            --fail \
+            --max-time 30 \
+            --retry 2 \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            "${REG_URL}/api/v1/attest" 2>/dev/null) || { log "WARN: Poll call failed — will retry"; continue; }
+
+        POLL_STATUS=$(/usr/local/bin/jq -r '.status' <<< "$POLL_RESP" 2>/dev/null || echo "unknown")
+        POLL_ACTION=$(/usr/local/bin/jq -r '.action // "none"' <<< "$POLL_RESP" 2>/dev/null || echo "none")
+        POLL_CFG_URL=$(/usr/local/bin/jq -r '.config_url // empty' <<< "$POLL_RESP" 2>/dev/null || echo "")
+        log "Poll response: status=${POLL_STATUS} action=${POLL_ACTION}"
+
+        if [ "$POLL_STATUS" = "attested" ]; then
+            MACHINE_ID=$(/usr/local/bin/jq -r '.machine_id' <<< "$POLL_RESP" 2>/dev/null || echo "")
+            log "Approved! machine_id=${MACHINE_ID}"
+            echo "${MACHINE_ID}" > "$ATTESTED_FLAG"
+            echo "$POLL_RESP"   > "${STATE_DIR}/attestation_receipt.json"
+            rm -f "${STATE_DIR}/pending_approval"
+
+            if [ "$POLL_ACTION" = "apply-config" ] && [ -n "$POLL_CFG_URL" ]; then
+                log "Applying machine config from Registration Service"
+                TALOS_CFG=$(mktemp)
+                if /usr/local/bin/curl --silent --fail --max-time 30 --retry 3 \
+                        -o "$TALOS_CFG" "$POLL_CFG_URL"; then
+                    if talosctl apply-config --insecure --nodes 127.0.0.1 \
+                            --file "$TALOS_CFG" 2>/dev/null; then
+                        log "MachineConfig applied — Talos will reboot into the cluster"
+                        rm -f "$TALOS_CFG"
+                        exit 0
+                    else
+                        log "ERROR: talosctl apply-config failed"
+                        cp "$TALOS_CFG" "${STATE_DIR}/pending.config"
+                    fi
+                else
+                    log "ERROR: Failed to download config from ${POLL_CFG_URL}"
+                fi
+                rm -f "$TALOS_CFG"
+            fi
+            exit 0
+        fi
+
+        if [ "$POLL_STATUS" = "locked" ] || [ "$POLL_STATUS" = "revoked" ]; then
+            log "WARN: Machine ${MACHINE_ID} status changed to ${POLL_STATUS} during poll — stopping"
+            break
+        fi
+    done
+    log "Poll loop ended — will retry attestation on next boot"
     exit 0
 else
     log "WARN: Unexpected attestation response: status=${STATUS}"

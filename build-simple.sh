@@ -60,6 +60,7 @@ echo ""
 EXTENSION_ARGS=(
     "--system-extension-image" "ghcr.io/itlusions/itl-talos-hardened-os-branding:${ITL_BRANDING_TAG}"
     "--system-extension-image" "ghcr.io/itlusions/itl-talos-hardened-os-security:${ITL_SECURITY_TAG}"
+    "--system-extension-image" "ghcr.io/itlusions/itl-talos-tpm-register:${ITL_TPM_REGISTER_TAG:-latest}"
     "--system-extension-image" "ghcr.io/siderolabs/gvisor:${GVISOR_TAG}"
     "--system-extension-image" "ghcr.io/siderolabs/intel-ucode:${INTEL_UCODE_TAG}"
 )

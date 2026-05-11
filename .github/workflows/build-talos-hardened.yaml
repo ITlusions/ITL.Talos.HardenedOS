@@ -295,6 +295,7 @@ jobs:
           TALOS_VERSION: ${{ env.TALOS_VERSION }}
           ITL_BRANDING_TAG: ${{ env.EXT_TAG }}
           ITL_SECURITY_TAG: ${{ env.EXT_TAG }}
+          ITL_TPM_REGISTER_TAG: ${{ env.EXT_TAG }}
           PROFILE: ${{ github.event.inputs.profile || 'standard' }}
           EXTRA_EXTENSIONS: ${{ github.event.inputs.extra_extensions || '' }}
           EXTRACT_NETBOOT: "true"
@@ -331,6 +332,7 @@ jobs:
           Extensions baked in (imager — airgap-ready):
             ghcr.io/itlusions/itl-talos-hardened-os-branding:${{ env.EXT_TAG }}
             ghcr.io/itlusions/itl-talos-hardened-os-security:${{ env.EXT_TAG }}
+            ghcr.io/itlusions/itl-talos-tpm-register:${{ env.EXT_TAG }}
             ghcr.io/siderolabs/gvisor (pinned tag)
             ghcr.io/siderolabs/intel-ucode (pinned tag)
           ${{ github.event.inputs.extra_extensions && format('  Extra: {0}', github.event.inputs.extra_extensions) || '' }}
@@ -377,6 +379,7 @@ jobs:
             ## Extensions (pre-installed — airgap-ready)
             - `itl-talos-hardened-os-branding` — ITLusions console banners, MOTD
             - `itl-talos-hardened-os-security` — sysctl hardening, audit rules, modprobe policy
+            - `itl-talos-tpm-register` — TPM attestation + Registration Service integration
             - `siderolabs/gvisor` — gVisor sandbox runtime
             - `siderolabs/intel-ucode` — Intel microcode updates
 
